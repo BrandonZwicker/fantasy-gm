@@ -49,6 +49,16 @@ function renderGate(msg) {
 
     ${msg ? `<div class="warn">${esc(msg)}</div>` : ''}
 
+    <input class="field" id="u" placeholder="Sleeper username" autocomplete="off" spellcheck="false">
+    <button class="btn solid" id="go">Find my leagues</button>
+
+    <div class="rule">or paste a league ID</div>
+    <input class="field" id="lid" placeholder="League ID" autocomplete="off">
+    <button class="btn" id="golid">Load that league</button>
+
+    <div id="out" style="margin-top:16px"></div>
+
+    <div class="rule">or</div>
     <div class="try">
       <div class="try-in">
         <div>
@@ -59,117 +69,68 @@ function renderGate(msg) {
         <button class="btn solid" id="demo">See it working →</button>
       </div>
     </div>
-
-    <div class="rule">or load your own</div>
-
-    <div class="platforms" id="plats"></div>
-
-    <div id="signin"></div>
-    <div id="out" style="margin-top:16px"></div>
   </div>`);
   app().appendChild(g);
 
+  const inp = g.querySelector('#u'), out = g.querySelector('#out');
+  const go = g.querySelector('#go'), lid = g.querySelector('#lid');
   g.querySelector('#demo').onclick = () => startExample();
+  inp.focus();
 
-  // Platform picker — Yahoo is shown but explains why it can't work here.
-  const plats = g.querySelector('#plats');
-  let platform = 'sleeper';
-  const signin = g.querySelector('#signin');
-  const out = g.querySelector('#out');
-
-  const drawSignin = () => {
-    const p = PLATFORMS[platform];
-    if (!p.available) {
-      signin.innerHTML = `<div class="unavail">
-        <b>${esc(p.name)} isn't supported from this site.</b>
-        ${p.detail.map(d => `<p>${esc(d)}</p>`).join('')}
-        <p class="s">Sleeper needs no login and works immediately.</p></div>`;
-      return;
-    }
-    signin.innerHTML = `
-      <input class="field" id="u" placeholder="Sleeper username" autocomplete="off" spellcheck="false">
-      <button class="btn solid" id="go">Find my leagues</button>
-      <div class="rule">or paste a league ID</div>
-      <input class="field" id="lid" placeholder="League ID" autocomplete="off">
-      <button class="btn" id="golid">Load that league</button>`;
-    wire();
+  const choose = (username, user_id, l) => {
+    SESSION = { kind: 'sleeper', username, user_id,
+                league_id: l.league_id, league_name: l.name };
+    writeJSON(KEY, SESSION);
+    run();
   };
 
-  for (const id of ['sleeper', 'yahoo']) {
-    const p = PLATFORMS[id];
-    const b = node(`<button class="plat ${id === platform ? 'on' : ''}" data-id="${id}">
-      <b>${esc(p.name)}</b><span>${p.available ? 'supported' : 'needs a proxy'}</span></button>`);
-    b.onclick = () => {
-      platform = id;
-      [...plats.children].forEach(c => c.classList.toggle('on', c.dataset.id === id));
-      out.innerHTML = '';
-      drawSignin();
-    };
-    plats.appendChild(b);
-  }
-  drawSignin();
-
-  function wire() {
-    const inp = signin.querySelector('#u'), go = signin.querySelector('#go');
-    const lid = signin.querySelector('#lid');
-    if (!inp) return;
-    inp.focus();
-
-    const choose = (username, user_id, l) => {
-      SESSION = { kind: 'sleeper', username, user_id,
-                  league_id: l.league_id, league_name: l.name };
-      writeJSON(KEY, SESSION);
-      run();
-    };
-
-    const byUser = async () => {
-      const u = inp.value.trim(); if (!u) return;
-      go.disabled = true; out.innerHTML = '<p class="lede">Searching…</p>';
-      try {
-        const { userId, season, leagues } = await PLATFORMS.sleeper.findLeagues(u, Sleeper);
-        if (!leagues.length) {
-          out.innerHTML = `<div class="warn">No ${esc(season)} leagues for “${esc(u)}”.
-            Try a league ID instead.</div>`;
-        } else {
-          out.innerHTML = '<div class="rule">choose a league</div>';
-          for (const l of leagues) {
-            const r = node(`<div class="opt-row"><div><b>${esc(l.name)}</b>
-              <div class="s">${l.teams} teams · ${esc(season)}</div></div>
-              <span class="arw">→</span></div>`);
-            r.onclick = () => choose(u, userId, l);
-            out.appendChild(r);
-          }
-        }
-      } catch (e) { out.innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
-      go.disabled = false;
-    };
-
-    const byLeague = async () => {
-      const id = lid.value.trim(); if (!id) return;
-      out.innerHTML = '<p class="lede">Loading league…</p>';
-      try {
-        const [lg, users, rosters] = await Promise.all([
-          Sleeper.league(id), Sleeper.leagueUsers(id), Sleeper.rosters(id)]);
-        if (!lg) throw new Error('League not found');
-        const byOwner = {};
-        for (const r of rosters || []) byOwner[r.owner_id] = r.roster_id;
-        out.innerHTML = `<div class="rule">which team is yours in ${esc(lg.name)}?</div>`;
-        for (const m of (users || []).sort((a, b) => (byOwner[a.user_id] || 99) - (byOwner[b.user_id] || 99))) {
-          const label = (m.metadata || {}).team_name || m.display_name;
-          const r = node(`<div class="opt-row"><div><b>${esc(label)}</b>
-            <div class="s">@${esc(m.display_name)}${byOwner[m.user_id] ? ' · roster ' + byOwner[m.user_id] : ''}</div></div>
+  const byUser = async () => {
+    const u = inp.value.trim(); if (!u) return;
+    go.disabled = true; out.innerHTML = '<p class="lede">Searching…</p>';
+    try {
+      const { userId, season, leagues } = await PLATFORMS.sleeper.findLeagues(u, Sleeper);
+      if (!leagues.length) {
+        out.innerHTML = `<div class="warn">No ${esc(season)} leagues for “${esc(u)}”.
+          Try a league ID instead.</div>`;
+      } else {
+        out.innerHTML = '<div class="rule">choose a league</div>';
+        for (const l of leagues) {
+          const r = node(`<div class="opt-row"><div><b>${esc(l.name)}</b>
+            <div class="s">${l.teams} teams · ${esc(season)}</div></div>
             <span class="arw">→</span></div>`);
-          r.onclick = () => choose(m.display_name, m.user_id, { league_id: id, name: lg.name });
+          r.onclick = () => choose(u, userId, l);
           out.appendChild(r);
         }
-      } catch (e) { out.innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
-    };
+      }
+    } catch (e) { out.innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
+    go.disabled = false;
+  };
 
-    go.onclick = byUser;
-    inp.onkeydown = e => { if (e.key === 'Enter') byUser(); };
-    signin.querySelector('#golid').onclick = byLeague;
-    lid.onkeydown = e => { if (e.key === 'Enter') byLeague(); };
-  }
+  const byLeague = async () => {
+    const id = lid.value.trim(); if (!id) return;
+    out.innerHTML = '<p class="lede">Loading league…</p>';
+    try {
+      const [lg, users, rosters] = await Promise.all([
+        Sleeper.league(id), Sleeper.leagueUsers(id), Sleeper.rosters(id)]);
+      if (!lg) throw new Error('League not found');
+      const byOwner = {};
+      for (const r of rosters || []) byOwner[r.owner_id] = r.roster_id;
+      out.innerHTML = `<div class="rule">which team is yours in ${esc(lg.name)}?</div>`;
+      for (const m of (users || []).sort((a, b) => (byOwner[a.user_id] || 99) - (byOwner[b.user_id] || 99))) {
+        const label = (m.metadata || {}).team_name || m.display_name;
+        const r = node(`<div class="opt-row"><div><b>${esc(label)}</b>
+          <div class="s">@${esc(m.display_name)}${byOwner[m.user_id] ? ' · roster ' + byOwner[m.user_id] : ''}</div></div>
+          <span class="arw">→</span></div>`);
+        r.onclick = () => choose(m.display_name, m.user_id, { league_id: id, name: lg.name });
+        out.appendChild(r);
+      }
+    } catch (e) { out.innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
+  };
+
+  go.onclick = byUser;
+  inp.onkeydown = e => { if (e.key === 'Enter') byUser(); };
+  g.querySelector('#golid').onclick = byLeague;
+  lid.onkeydown = e => { if (e.key === 'Enter') byLeague(); };
 }
 
 /* ================= dashboard pieces ================= */
