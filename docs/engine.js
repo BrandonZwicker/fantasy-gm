@@ -391,21 +391,38 @@ export class ProjectionBook {
     return Boolean(wk[pid]?.opponent);
   }
 
-  /** Sum loaded weeks; prorate season totals for weeks Sleeper hasn't posted. */
+  /** Sum loaded weeks, extrapolating the ones Sleeper hasn't posted yet.
+   *
+   *  Extrapolation uses each player's own weekly average rather than the
+   *  season-long endpoint, which is incomplete for some positions — it returns
+   *  `fgm: null` for kickers, counting only extra points, which understates
+   *  them by roughly two thirds. Season totals are used only when no weekly
+   *  data exists at all.
+   */
   restOfSeason(fromWeek, throughWeek) {
     const through = throughWeek || LAST_REG_WEEK;
-    const totals = {};
+    const totals = {}, played = {};
     let found = 0;
     for (let w = fromWeek; w <= through; w++) {
       const wk = this.weeks.get(w);
       if (!wk) continue;
       found++;
-      for (const pid in wk) totals[pid] = (totals[pid] || 0) + wk[pid].points;
+      for (const pid in wk) {
+        totals[pid] = (totals[pid] || 0) + wk[pid].points;
+        // Count only weeks with a game, so a bye doesn't drag the average down.
+        if (wk[pid].opponent) played[pid] = (played[pid] || 0) + 1;
+      }
     }
     const missing = (through - fromWeek + 1) - found;
-    if (missing > 0 && this.seasonTotals) {
-      for (const pid in this.seasonTotals) {
-        totals[pid] = (totals[pid] || 0) + (this.seasonTotals[pid] / LAST_REG_WEEK) * missing;
+    if (missing > 0) {
+      const season = this.seasonTotals || {};
+      const ids = new Set([...Object.keys(totals), ...Object.keys(season)]);
+      for (const pid of ids) {
+        const games = played[pid] || 0;
+        const perWeek = games > 0
+          ? totals[pid] / games
+          : (season[pid] || 0) / LAST_REG_WEEK;
+        totals[pid] = (totals[pid] || 0) + perWeek * missing;
       }
     }
     for (const k in totals) totals[k] = Math.round(totals[k] * 100) / 100;

@@ -104,6 +104,38 @@ responses with CORS headers. The engine is deliberately platform-agnostic —
 the code only ever sees rosters, scoring settings and projections. Adding Yahoo
 is a proxy plus a provider, not a rewrite.
 
+## Validation
+
+`tests/test_validation.py` checks the maths against Sleeper's own published
+numbers rather than against itself.
+
+**Scoring is exact.** Sleeper publishes `pts_std` / `pts_half_ppr` / `pts_ppr`
+next to the raw stat components. Applying a real league's 43-key scoring
+dictionary to actual stats reproduces Sleeper's figure for **100% of QB, RB and
+TE rows and 99.8% of WR rows** (99.93% across skill positions, mean absolute
+error 0.004). The handful of disagreements are cases where the league scores a
+category Sleeper's generic PPR does not — which is the entire point of the
+exercise. IDP rows correctly score zero, because that league does not score IDP.
+
+**The lineup optimiser is exact.** No external source can verify it, so the DP
+is checked against exhaustive search over randomised rosters and flex shapes,
+including non-nested ones: **300/300 assignments identical**.
+
+**A finding worth knowing.** The same comparison does *not* reconcile on
+projections: QBs diverge by +2.24 points and kickers by +1.52, while RB/WR/TE
+sit at +0.005. Since actual stats reconcile perfectly, this is not a scoring
+bug — Sleeper's projected `pts_ppr` is a separately modelled number, not the
+dot product of its own projected components. The gap is systematic within a
+position (standard deviation 0.30), so within-position ordering is preserved,
+but QB and K value is understated when comparing across positions. The test
+reports it every run so it stays visible.
+
+**A bug this process caught.** Sleeper's season-long endpoint returns
+`fgm: null` for kickers, counting only extra points — it values a kicker at 46
+points when his real rest-of-season projection is 111. Rest-of-season figures
+now extrapolate unpublished weeks from each player's own weekly average rather
+than from that endpoint.
+
 ## Architecture
 
 ```
