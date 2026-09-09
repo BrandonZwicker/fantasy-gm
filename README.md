@@ -121,14 +121,28 @@ exercise. IDP rows correctly score zero, because that league does not score IDP.
 is checked against exhaustive search over randomised rosters and flex shapes,
 including non-nested ones: **300/300 assignments identical**.
 
-**A finding worth knowing.** The same comparison does *not* reconcile on
-projections: QBs diverge by +2.24 points and kickers by +1.52, while RB/WR/TE
-sit at +0.005. Since actual stats reconcile perfectly, this is not a scoring
-bug — Sleeper's projected `pts_ppr` is a separately modelled number, not the
-dot product of its own projected components. The gap is systematic within a
-position (standard deviation 0.30), so within-position ordering is preserved,
-but QB and K value is understated when comparing across positions. The test
-reports it every run so it stays visible.
+**Projections are calibrated to Sleeper.** The same comparison did *not*
+reconcile on projections: QBs diverged by +2.24 points and kickers by +1.52,
+while RB/WR/TE sat at +0.005. Since actual stats reconcile perfectly, that was
+never a scoring bug — Sleeper's projected `pts_ppr` is a separately modelled
+figure rather than the dot product of its own projected components, so scoring
+only the itemised components understated quarterbacks and kickers whenever
+positions were compared against each other.
+
+`score_projection` keeps the league's rules for everything the components
+explain and adds back the part they don't:
+
+```
+league dot-product  +  (Sleeper's pts_ppr - reference dot-product)
+```
+
+The reference dictionary is verified, not assumed: applied to actual stats it
+reproduces Sleeper's `pts_ppr` for 100% of QB, RB, WR and TE rows. Every
+position now tracks Sleeper's own projection to ±0.000, and the correction
+provably does not flatten league differences — a 6-point-passing-TD league
+still values Lamar Jackson at 28.71 against 25.07, a half-PPR league values
+Ja'Marr Chase at 17.18 against 20.36, and **0 of 145 receivers and 0 of 33
+quarterbacks collapse** onto Sleeper's generic number.
 
 **A bug this process caught.** Sleeper's season-long endpoint returns
 `fgm: null` for kickers, counting only extra points — it values a kicker at 46

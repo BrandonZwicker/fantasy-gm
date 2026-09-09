@@ -91,24 +91,32 @@ def check_scoring_on_actuals(rules, rows) -> bool:
     return rate >= 0.995
 
 
-def report_projection_divergence(rules, rows):
-    """Quantify (not assert) the projections gap, so regressions are visible."""
-    print("\n  Engine vs Sleeper, PROJECTIONS — divergence by position")
-    print(f"    {'position':<10}{'n':>6}{'mean gap':>11}{'sd':>9}")
-    out = {}
+def check_projection_calibration(rules, rows) -> bool:
+    """Projections must now track Sleeper's own headline number.
+
+    Sleeper's projected pts_ppr is a separately modelled figure rather than the
+    dot product of its own components, so scoring the components alone
+    understates QBs and kickers. `score_projection` adds back the difference;
+    this confirms it closes the gap without disturbing the positions that were
+    already correct.
+    """
+    print("\n  Engine vs Sleeper, PROJECTIONS — before and after calibration")
+    print(f"    {'position':<10}{'n':>6}{'raw gap':>10}{'raw sd':>9}"
+          f"{'calibrated':>12}{'cal sd':>9}")
+    worst_after = 0.0
     for pos in STARTABLE:
-        gaps = [st["pts_ppr"] - rules.score(st)
-                for p, st in rows if p.position == pos and st["pts_ppr"] > 3]
-        if len(gaps) < 20:
+        sel = [st for p, st in rows if p.position == pos and st["pts_ppr"] > 3]
+        if len(sel) < 20:
             continue
-        out[pos] = (mean(gaps), pstdev(gaps))
-        print(f"    {pos:<10}{len(gaps):>6}{mean(gaps):>+11.3f}{pstdev(gaps):>9.3f}")
-    print("\n    Sleeper's projected pts_ppr is not the dot product of its own")
-    print("    projected components, so this gap is expected. It is systematic")
-    print("    within a position (small sd), which preserves within-position")
-    print("    ordering; it does mean QB and K value is understated relative to")
-    print("    Sleeper's headline number when comparing across positions.")
-    return out
+        raw = [st["pts_ppr"] - rules.score(st) for st in sel]
+        cal = [st["pts_ppr"] - rules.score_projection(st) for st in sel]
+        worst_after = max(worst_after, abs(mean(cal)))
+        print(f"    {pos:<10}{len(sel):>6}{mean(raw):>+10.3f}{pstdev(raw):>9.3f}"
+              f"{mean(cal):>+12.3f}{pstdev(cal):>9.3f}")
+    ok = worst_after < 0.05
+    print(f"\n    largest remaining mean gap: {worst_after:.4f}"
+          + ("  ✓" if ok else "  — still diverging"))
+    return ok
 
 
 def brute_force_lineup(rules, cands, positions):
@@ -170,14 +178,15 @@ def main() -> int:
           f"({SEASON}, weeks {WEEKS[0]}–{WEEKS[-1]})")
 
     scoring_ok = check_scoring_on_actuals(rules, actual)
-    report_projection_divergence(rules, proj)
+    projection_ok = check_projection_calibration(rules, proj)
     optimizer_ok = check_optimizer()
 
     print()
-    ok = scoring_ok and optimizer_ok
+    ok = scoring_ok and projection_ok and optimizer_ok
     print(f"VERDICT: {'PASS' if ok else 'FAIL'} — "
           f"scoring {'reproduces' if scoring_ok else 'does NOT reproduce'} Sleeper "
-          f"exactly on real stats; optimiser {'exact' if optimizer_ok else 'MISMATCHED'}")
+          f"exactly on real stats; projections {'track' if projection_ok else 'DIVERGE from'} "
+          f"Sleeper's own figure; optimiser {'exact' if optimizer_ok else 'MISMATCHED'}")
     return 0 if ok else 1
 
 

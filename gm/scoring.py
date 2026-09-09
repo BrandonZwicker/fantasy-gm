@@ -30,6 +30,31 @@ SLOT_ELIGIBILITY: dict[str, set[str]] = {
 # Slots that are not part of the starting lineup.
 NON_STARTING = {"BN", "IR", "TAXI"}
 
+# Sleeper's own default PPR scoring, verified against their published points:
+# applying this to ACTUAL stats reproduces `pts_ppr` for 100% of QB, RB, WR and
+# TE rows. It exists so we can separate "value Sleeper's model projects" from
+# "value this league's rules award", which are different things.
+REFERENCE_PPR = {
+    "pass_yd": 0.04, "pass_td": 4.0, "pass_int": -1.0, "pass_2pt": 2.0,
+    "rush_yd": 0.1, "rush_td": 6.0, "rush_2pt": 2.0,
+    "rec": 1.0, "rec_yd": 0.1, "rec_td": 6.0, "rec_2pt": 2.0,
+    "fum_lost": -2.0, "fum": 0.0, "fum_rec": 2.0,
+    "fgm_0_19": 3.0, "fgm_20_29": 3.0, "fgm_30_39": 3.0, "fgm_40_49": 4.0,
+    "fgm_50_59": 5.0, "fgm_60p": 6.0, "fgmiss": -1.0,
+    "xpm": 1.0, "xpmiss": -1.0,
+    "def_td": 6.0, "def_st_td": 6.0, "st_td": 6.0,
+    "int": 2.0, "sack": 1.0, "safe": 2.0, "blk_kick": 2.0,
+    "ff": 1.0, "def_st_ff": 1.0, "st_ff": 1.0,
+    "def_st_fum_rec": 1.0, "st_fum_rec": 1.0,
+    "pts_allow_0": 10.0, "pts_allow_1_6": 7.0, "pts_allow_7_13": 4.0,
+    "pts_allow_14_20": 1.0, "pts_allow_21_27": 0.0, "pts_allow_28_34": -1.0,
+    "pts_allow_35p": -4.0,
+}
+
+# Below this the reference dictionary doesn't describe the player (IDP rows
+# score ~0 under it), so no residual can be attributed.
+_MIN_REFERENCE = 0.5
+
 # Rough scarcity ordering used to break ties when filling flex slots.
 _SLOT_FLEXIBILITY = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "K": 0, "DEF": 0}
 
@@ -66,15 +91,53 @@ class LeagueRules:
         """Apply this league's scoring dictionary to a raw stat line."""
         if not stats:
             return 0.0
+        return round(self._dot(stats, self.scoring), 2)
+
+    @staticmethod
+    def _dot(stats: dict, weights: dict) -> float:
         total = 0.0
         for stat, value in stats.items():
-            weight = self.scoring.get(stat)
-            if weight:
+            w = weights.get(stat)
+            if w:
                 try:
-                    total += float(value) * weight
+                    total += float(value) * w
                 except (TypeError, ValueError):
                     continue
-        return round(total, 2)
+        return total
+
+    def score_projection(self, stats: dict[str, float] | None) -> float:
+        """Score a projection, trusting Sleeper's own headline number.
+
+        Sleeper's projected ``pts_ppr`` is a separately modelled figure, not the
+        dot product of its own projected components: on real stats the two agree
+        exactly, but on projections quarterbacks diverge by about +2.2 points and
+        kickers by +1.5, while running backs and receivers sit near zero. Scoring
+        only the itemised components would therefore understate QB and K value
+        whenever positions are compared against each other.
+
+        So we keep the league's rules for everything the components explain, and
+        add the part of Sleeper's projection they don't:
+
+            league dot-product  +  (Sleeper's pts_ppr - reference dot-product)
+
+        For a league scored like standard PPR this reproduces Sleeper's number
+        exactly; for any other league it carries the same unexplained value onto
+        that league's own scale.
+        """
+        if not stats:
+            return 0.0
+        own = self._dot(stats, self.scoring)
+        sleeper = stats.get("pts_ppr")
+        if sleeper is None:
+            return round(own, 2)
+        reference = self._dot(stats, REFERENCE_PPR)
+        if reference <= _MIN_REFERENCE:
+            return round(own, 2)     # reference doesn't describe this player
+        residual = float(sleeper) - reference
+        # Guard against a reference that fits badly for some unusual row.
+        cap = max(4.0, 0.5 * reference)
+        residual = max(-cap, min(cap, residual))
+        return round(own + residual, 2)
 
     # ---------- roster shape ----------
 
