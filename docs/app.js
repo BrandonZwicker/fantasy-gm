@@ -45,8 +45,7 @@ function renderGate(msg) {
     <div class="mark">Fantasy <em>GM</em></div>
     <p class="lede">Reads your fantasy league end to end and tells you exactly what
       to do about it — lineup changes, waiver claims, trades — scored under your
-      league's own settings. Read-only, and there is no server: it runs entirely
-      in this browser.</p>
+      league's own settings.</p>
 
     ${msg ? `<div class="warn">${esc(msg)}</div>` : ''}
 
