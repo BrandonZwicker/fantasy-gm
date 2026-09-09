@@ -1,171 +1,120 @@
 # Fantasy GM
 
-An automated general manager for a Sleeper fantasy football league. It reads your
-league's exact settings, re-scores every NFL player under *your* rules, and tells
-you the specific roster moves to make.
+**[Live demo →](https://brandonzwicker.github.io/fantasy-gm/)**
 
-Built for someone who doesn't watch football.
+Reads a Sleeper fantasy football league end to end and recommends the exact
+roster moves to make — start/sit changes, waiver claims with bid sizing, and
+trades — all scored under *that league's own settings* rather than generic
+rankings.
 
-## What it does
+The deployed version runs entirely in the browser. There is no backend, no
+build step and no API key: it calls Sleeper's public API directly, re-scores
+every projection under your league's scoring dictionary, and solves the
+optimisation client-side.
 
-- **Reads your league's real rules** — scoring dictionary, roster slots, waiver
-  type and budget, trade deadline, playoff structure. Every recommendation is
-  derived from these, not from generic PPR rankings.
-- **Optimal lineup** — solves the start/sit assignment exactly (flex slots and
-  all), and tells you which swaps gain how many points.
-- **Waiver targets** — ranked by points added *to your starting lineup*, with a
-  FAAB bid sized against your remaining budget and league-wide competition.
-- **Drop candidates** — who you can cut with the least cost.
-- **Trade finder** — scans every rival roster for deals that improve both teams,
-  and labels how likely each is to actually be accepted.
-- **Change monitor** — diffs the league between checks: adds, drops, trades,
-  injury designations, depth-chart moves, and league-wide waiver runs.
+---
 
-## The one limitation
+## Why league-specific scoring matters
 
-**Sleeper has no public write API.** Nothing here can submit a waiver claim, set
-a lineup, or send a trade offer on your behalf. This tells you exactly what to do
-and when; you tap it into the Sleeper app. Everything up to that click is automated.
+Most fantasy tools rank players by standard PPR and call it a day. Sleeper's
+projections endpoint returns the **raw stat components** — `rush_yd`, `rec`,
+`rec_td`, `pass_int` and forty others — not just a points total. Re-scoring
+those components with the league's own `scoring_settings` means a TE-premium,
+superflex or half-PPR league gets genuinely different advice.
 
-## Setup
+The effect is not cosmetic. Moving the same projections from a 1-QB to a
+superflex league drops QB replacement level from 265 to 238 points, which
+reprices every quarterback on the board.
 
-Start the server and open it — anyone can use it with their own account:
+## How the recommendations are built
 
-```bash
-cd fantasy-gm
-./.venv/bin/python cli.py serve
-```
+**Optimal lineup — exact, not greedy.** Filling the best player into each slot
+in turn gives the wrong answer when flex eligibility isn't nested (`REC_FLEX`
+is WR/TE, `WRRB_FLEX` is RB/WR — neither contains the other). The assignment is
+solved exactly with a DP over a bitmask of filled slots.
 
-Then open http://localhost:8000. It loads the **default league** straight away —
-whichever one was set with `cli.py link` (see below).
+**Waivers ranked by marginal lineup value.** A free agent is scored by what he
+adds to your *starting* lineup, not by his projection. A WR4 who never cracks
+your lineup is worth zero no matter how good his ranking looks.
 
-Anyone else can use it with their own account: **Switch league** in the header
-opens the picker, where they enter their Sleeper username and choose a league.
-If a league doesn't appear (an older season, or an account they don't own), they
-can paste the league ID instead and pick which team is theirs. The picker always
-offers a one-click way back to the default.
-
-The server holds one configured default and no per-visitor state. Once someone
-picks their own league it lives in their browser (`localStorage`), never on the
-server, so several people can use one instance at once without colliding.
-
-### Setting the default league
-
-```bash
-./.venv/bin/python cli.py link <your_sleeper_username>
-```
-
-This writes `data/config.json` and becomes what the dashboard shows to any
-visitor who hasn't picked a league of their own. It is also what `cli.py report`
-and `cli.py watch` operate on.
-
-```bash
-./.venv/bin/python cli.py report
-```
-
-## Usage
-
-```bash
-./.venv/bin/python cli.py report          # full recommendations
-./.venv/bin/python cli.py report --force  # bypass cache, fresh pull
-./.venv/bin/python cli.py watch --every 900   # poll and print changes
-./.venv/bin/python cli.py serve           # web dashboard on :8000
-./.venv/bin/python demo.py                # synthetic league on :8077
-```
-
-The dashboard is the main interface: an action queue at the top, the optimal
-lineup, waiver targets with bids, trade ideas, and a change feed.
-
-### Running it continuously
-
-`watch` polls on an interval. To have it run unattended, schedule it — the
-useful cadence is hourly during the week, and every 15 minutes on Sunday
-mornings before the early kickoffs.
-
-```bash
-# crontab -e
-0 * * * * cd /path/to/fantasy-gm && ./.venv/bin/python cli.py report --force >> data/gm.log 2>&1
-```
-
-## How the recommendations work
-
-**Scoring.** Sleeper exposes projections as raw stat components
-(`rush_yd`, `rec`, `rec_td`, …). We apply your league's own scoring dictionary to
-those components. A TE-premium or superflex league produces genuinely different
-numbers, not the same rankings relabelled.
-
-**Value over replacement.** Raw points rank QBs first in every league. What
-matters is the surplus over the freely available alternative at that position,
-and replacement level depends on how many of each position your league starts.
-A superflex league drops QB replacement level sharply, which reprices every QB.
-
-**Marginal value.** A waiver target is scored by how much he adds to your
-*optimal lineup*, not by his projection. A WR4 who never cracks your lineup is
-worth zero no matter how good he looks on a ranking page.
-
-**Trade acceptance.** A deal that is optimal for both lineups still gets
-rejected if it looks lopsided by name value. Each idea is scored on the value
-you send versus receive, and offers that would insult the other manager are
-suppressed rather than shown. When nothing qualifies, it says so and names your
-most tradeable surplus instead of showing an empty panel.
-
-**Waivers adapt to the league.** FAAB leagues get a bid sized against your
-remaining budget and league-wide competition. Priority leagues (rolling or
-reverse-standings) get your current priority number instead, because there is
-nothing to bid.
-
-**Recommendations are de-conflicted.** Three defenses that all want the same
+**Recommendations are de-conflicted.** Three defenses competing for the same
 bench spot are one move with two fallbacks, not three moves. Moves are chosen
 greedily: the best claim is applied to the roster, then everything is re-scored
-against the result. A candidate that keeps its value is a genuinely separate
-move; one whose value collapses was after the same job and is attached to the
-winner as an alternative. The same holds for trades built on the same outgoing
-player. Greedy sequencing is also capped so a claim can never cut a
-higher-value asset than the one being added — otherwise it will happily drop a
-top-tier TE to stream a defense once a replacement is in hand.
+against the result. A candidate that keeps its value is a separate move; one
+whose value collapses was after the same job and becomes an alternative.
 
-**Everything is ranked on one scale.** Each suggested move carries the points
-at stake and the deadline that applies to it, and is scored as impact per
-remaining week multiplied by how soon the chance to act disappears. A lineup
-change locks at kickoff and is weighted hardest; a waiver claim locks at the
-next waiver run; a trade has weeks of runway and is discounted further by how
-likely the partner is to accept. That produces the ordering and the tier label
-("Do now" through "Optional") rather than a hand-assigned priority.
+**Trades require mutual gain.** Both rosters are re-optimised for every
+candidate swap, and only deals that improve *both* lineups survive. Offers are
+then filtered by perceived value — a deal that is optimal for both teams still
+gets rejected if it looks lopsided, so insulting offers are never shown.
 
-**Every move explains itself.** Each recommendation carries a step-by-step
-justification — what the player is worth under your scoring, which slot he
-fills and who he displaces, why the suggested drop is safe, what the claim
-costs, and what could go wrong — shown behind a "Why this move?" disclosure.
+**Everything is ranked on one scale:** points at stake per remaining week,
+multiplied by how soon the chance to act disappears. A lineup change locks at
+kickoff and is weighted hardest; a waiver claim locks at the next waiver run; a
+trade has weeks of runway and is discounted by how likely the partner is to
+accept.
 
-**Drops never include a current starter.** Rest-of-season cost can read 0.0 for
-a player who is nonetheless in this week's lineup, since someone absorbs the
-role later in the year. Those players are flagged and held back.
+**Every move explains itself** behind a "Why this move?" disclosure — what the
+player is worth under your scoring, which slot he fills and who he displaces,
+why the suggested drop is safe, what the claim costs, and what could go wrong.
 
-## Layout
+## Guardrails that took real debugging
+
+Several of these were bugs the naive version shipped happily:
+
+- **Drops never include a current starter.** Rest-of-season cost reads 0.0 for a
+  player who is nonetheless in this week's lineup, because someone absorbs the
+  role later in the year. Recommending that player as a "safe drop" would cost
+  you the game.
+- **A claim can never cut a higher-value asset.** Greedy sequencing will cheerfully
+  drop a top-tier TE to stream a defense once a replacement is claimed — the
+  lineup math says it's free, but a real asset is destroyed.
+- **Start/sit pairs by slot, not by index.** Zipping the entering and leaving
+  lists positionally produces advice like "start this QB over that tight end".
+- **Pure slot shuffles are suppressed.** Moving an RB between the RB and FLEX
+  slots never changes your score; suggesting it is noise, not advice.
+
+## Architecture
 
 ```
-gm/sleeper.py      Cached Sleeper API client
-gm/scoring.py      League rules + scoring engine
-gm/players.py      Player index, injury handling
-gm/projections.py  Projections re-scored under your rules; bye detection
-gm/lineup.py       Exact lineup optimizer (DP over slot assignments)
-gm/value.py        Replacement levels and VOR
-gm/league.py       Assembled league state: teams, rosters, free agents
-gm/waivers.py      Waiver targets, FAAB bid sizing, drop candidates
-gm/trades.py       Mutual-gain trade finder with acceptance modelling
-gm/monitor.py      Change detection between polls
-gm/recommend.py    Orchestrator -> ranked action queue
-gm/api.py          FastAPI backend
-web/index.html     Dashboard
-tests/             Synthetic league harness + end-to-end test
+docs/            the deployed static site (GitHub Pages)
+  engine.js      Sleeper client, league rules, scoring, lineup DP, VOR
+  advice.js      waivers, trades, change detection
+  report.js      orchestration, ranking, generated reasoning
+  app.js         UI
+gm/              Python reference implementation
+tests/           end-to-end tests against a synthetic league
 ```
 
-## Testing
+The Python package under `gm/` is the reference implementation the engine was
+developed and validated against, and it still runs as a local server with a
+CLI. It additionally supports **scheduled background monitoring**, which the
+static build cannot do — with no server, change detection only runs when the
+page is open.
 
-`tests/` builds a realistic 12-team league from real players and real
-projections, so the whole pipeline can be exercised without touching anyone's
-private league.
+The browser build needs no player database: Sleeper embeds each player's
+position, team, opponent and injury status in the projections payload, so the
+14.6 MB player dump is never downloaded.
+
+## Running the Python version locally
 
 ```bash
+python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python cli.py link <your_sleeper_username>
+./.venv/bin/python cli.py report        # recommendations in the terminal
+./.venv/bin/python cli.py serve         # local web dashboard
+./.venv/bin/python cli.py watch         # poll for changes
 ./.venv/bin/python tests/test_pipeline.py
 ```
+
+Tests run against a synthetic 12-team league built from real player data, so
+the full pipeline is exercised without touching anyone's private league.
+
+## Notes
+
+Sleeper has no public write API, so nothing here can submit a waiver claim, set
+a lineup or send a trade. It tells you exactly what to do; you tap it into the
+app. Everything up to the click is automated.
+
+The example league shown by default anonymises other managers to "Team N" —
+their Sleeper handles aren't mine to publish.
