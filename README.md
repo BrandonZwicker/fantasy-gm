@@ -89,7 +89,7 @@ Several of these were bugs the naive version shipped happily:
 **Sleeper works.** Its API is unauthenticated and sends
 `access-control-allow-origin: *`, so the browser can call it directly.
 
-**Yahoo does not, and cannot from a static site.** Two independent blockers:
+**Yahoo and ESPN cannot work from a static site.** Two independent blockers:
 
 1. Yahoo's fantasy API returns no `access-control-allow-origin` header at all —
    an `OPTIONS` preflight answers `401` with no CORS headers — so a browser
@@ -102,8 +102,7 @@ function) that holds the secret, performs the OAuth handshake, and forwards
 responses with CORS headers. The engine is deliberately platform-agnostic —
 `docs/providers.js` defines the shape a platform must supply, and the rest of
 the code only ever sees rosters, scoring settings and projections. Adding Yahoo
-is a proxy plus a provider, not a rewrite. The UI states this limitation
-plainly rather than hiding the option.
+is a proxy plus a provider, not a rewrite.
 
 ## Architecture
 
