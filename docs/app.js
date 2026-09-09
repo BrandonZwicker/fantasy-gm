@@ -155,7 +155,7 @@ function actionHTML(a) {
     <div class="line">
       <span class="rk ${a.rank <= 2 ? 'top' : ''}">${a.rank}</span>
       <span class="chip t${a.priority}">${esc(a.tier_label || '')}</span>
-      <div style="flex:1"><h4>${esc(a.headline)}</h4>
+      <div class="actbody"><h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
     </div>
     <div class="meta-row">${pts}${rate}
@@ -237,7 +237,7 @@ const CARDS = {
       return `<div class="deal">
         <div class="hdr"><b>${esc(t.partner_name)}</b>
           <span class="tagx ${cls}">${esc(t.acceptance)}</span>
-          <span style="margin-left:auto;font-size:13px;font-weight:600;color:var(--gain)">+${t.my_gain.toFixed(1)}</span></div>
+          <span class="dealgain">+${t.my_gain.toFixed(1)}</span></div>
         <div class="swap">
           <div class="lb">send</div><div class="out">${t.send.map(plain).join(', ')}</div>
           <div class="lb">get</div><div class="inn">${t.receive.map(plain).join(', ')}</div>
@@ -296,12 +296,17 @@ function render(r, { isExample }) {
       ${isExample ? '<span class="exbadge">example</span>' : ''}
       <div class="crumb">Week ${r.week} · <b>${esc(r.my_team)}</b> · ${esc(r.record)}</div>
       <div class="grow"></div>
-      <div class="seg" id="seg">
-        <button data-mode="tabs" class="${mode === 'tabs' ? 'on' : ''}">Sections</button>
-        <button data-mode="all" class="${mode === 'all' ? 'on' : ''}">One page</button>
+      <div class="viewsel">
+        <span class="viewlbl">Page view</span>
+        <div class="seg" id="seg">
+          <button data-mode="tabs" class="${mode === 'tabs' ? 'on' : ''}">Sections</button>
+          <button data-mode="all" class="${mode === 'all' ? 'on' : ''}">One page</button>
+        </div>
       </div>
-      <button class="btn" id="refresh">Refresh</button>
-      <button class="btn quiet" id="switch">Switch</button>
+      <div class="acts">
+        <button class="btn" id="refresh">Refresh</button>
+        <button class="btn quiet" id="switch">Switch</button>
+      </div>
     </div>
     ${mode === 'tabs' ? `<div class="tabs" id="tabs">${TABS.map(t =>
       `<button data-tab="${t.id}" class="${t.id === tab ? 'on' : ''}">${t.label}</button>`).join('')}</div>` : ''}
