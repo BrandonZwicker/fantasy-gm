@@ -53,12 +53,44 @@ export const SLOT_ELIGIBILITY = {
   DL: ['DL', 'DE', 'DT'], LB: ['LB'], DB: ['DB', 'CB', 'S'],
 };
 const NON_STARTING = new Set(['BN', 'IR', 'TAXI']);
+
+// Sleeper's own default PPR scoring, verified against their published points:
+// applied to ACTUAL stats it reproduces `pts_ppr` for 100% of QB, RB, WR and TE
+// rows. It lets us separate "value Sleeper's model projects" from "value this
+// league's rules award", which are different things.
+const REFERENCE_PPR = {
+  pass_yd: 0.04, pass_td: 4, pass_int: -1, pass_2pt: 2,
+  rush_yd: 0.1, rush_td: 6, rush_2pt: 2,
+  rec: 1, rec_yd: 0.1, rec_td: 6, rec_2pt: 2,
+  fum_lost: -2, fum: 0, fum_rec: 2,
+  fgm_0_19: 3, fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4,
+  fgm_50_59: 5, fgm_60p: 6, fgmiss: -1,
+  xpm: 1, xpmiss: -1,
+  def_td: 6, def_st_td: 6, st_td: 6,
+  int: 2, sack: 1, safe: 2, blk_kick: 2,
+  ff: 1, def_st_ff: 1, st_ff: 1, def_st_fum_rec: 1, st_fum_rec: 1,
+  pts_allow_0: 10, pts_allow_1_6: 7, pts_allow_7_13: 4,
+  pts_allow_14_20: 1, pts_allow_21_27: 0, pts_allow_28_34: -1,
+  pts_allow_35p: -4,
+};
+// Below this the reference doesn't describe the player (IDP rows score ~0
+// under it), so no residual can be attributed.
+const MIN_REFERENCE = 0.5;
 const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
 
 /* ---------------- league rules ---------------- */
 
 const WAIVER_DAYS = ['Tuesday', 'Wednesday', 'Thursday', 'Friday',
                      'Saturday', 'Sunday', 'Monday'];
+
+function dot(stats, weights) {
+  let total = 0;
+  for (const k in stats) {
+    const w = weights[k];
+    if (w) total += stats[k] * w;
+  }
+  return total;
+}
 
 export class LeagueRules {
   constructor(raw) {
@@ -75,12 +107,33 @@ export class LeagueRules {
   /** Apply this league's own scoring dictionary to a raw stat line. */
   score(stats) {
     if (!stats) return 0;
-    let total = 0;
-    for (const k in stats) {
-      const w = this.scoring[k];
-      if (w) total += stats[k] * w;
-    }
-    return Math.round(total * 100) / 100;
+    return Math.round(dot(stats, this.scoring) * 100) / 100;
+  }
+
+  /** Score a projection, trusting Sleeper's own headline number.
+   *
+   *  Sleeper's projected `pts_ppr` is a separately modelled figure, not the dot
+   *  product of its own projected components: on real stats the two agree
+   *  exactly, but on projections quarterbacks diverge by about +2.2 points and
+   *  kickers by +1.5, while running backs and receivers sit near zero. Scoring
+   *  only the itemised components would understate QB and K value whenever
+   *  positions are compared against one another.
+   *
+   *  So we keep the league's rules for everything the components explain, and
+   *  add the part of Sleeper's projection they don't. For a league scored like
+   *  standard PPR this reproduces Sleeper's number exactly; for any other
+   *  league it carries the same unexplained value onto that league's scale.
+   */
+  scoreProjection(stats) {
+    if (!stats) return 0;
+    const own = dot(stats, this.scoring);
+    const sleeper = stats.pts_ppr;
+    if (sleeper == null) return Math.round(own * 100) / 100;
+    const reference = dot(stats, REFERENCE_PPR);
+    if (reference <= MIN_REFERENCE) return Math.round(own * 100) / 100;
+    const cap = Math.max(4, 0.5 * reference);
+    const residual = Math.max(-cap, Math.min(cap, sleeper - reference));
+    return Math.round((own + residual) * 100) / 100;
   }
 
   get startingSlots() { return this.rosterPositions.filter(p => !NON_STARTING.has(p)); }
@@ -373,7 +426,7 @@ export class ProjectionBook {
     const out = {};
     for (const r of rows || []) {
       const pid = String(r.player_id || '');
-      if (pid) out[pid] = this.rules.score(r.stats);
+      if (pid) out[pid] = this.rules.scoreProjection(r.stats);
     }
     this.seasonTotals = out;
     return out;
