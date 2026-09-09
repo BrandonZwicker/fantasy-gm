@@ -91,11 +91,15 @@ class ProjectionBook:
                        ) -> dict[str, float]:
         """Sum of weekly projections from `from_week` onward.
 
-        Falls back to prorating season totals for weeks Sleeper hasn't
-        published yet (it typically only posts a few weeks ahead).
+        Weeks Sleeper hasn't published yet are extrapolated from each player's
+        own weekly average rather than from the season-long endpoint, which is
+        incomplete for some positions: it returns ``fgm: None`` for kickers,
+        counting only extra points, which understates them by roughly two
+        thirds. Season totals are the fallback only when no weekly data exists.
         """
         through = through_week or LAST_REG_WEEK
         totals: dict[str, float] = {}
+        played: dict[str, int] = {}
         weeks_found = 0
         for w in range(from_week, through + 1):
             wk = self.week(w)
@@ -104,12 +108,17 @@ class ProjectionBook:
             weeks_found += 1
             for pid, wp in wk.items():
                 totals[pid] = totals.get(pid, 0.0) + wp.points
+                # Only count weeks with a game so byes don't drag the average.
+                if wp.opponent:
+                    played[pid] = played.get(pid, 0) + 1
 
         weeks_missing = (through - from_week + 1) - weeks_found
         if weeks_missing > 0:
             season = self.season_totals()
-            for pid, total in season.items():
-                per_week = total / LAST_REG_WEEK
+            for pid in set(totals) | set(season):
+                games = played.get(pid, 0)
+                per_week = (totals[pid] / games if games
+                            else season.get(pid, 0.0) / LAST_REG_WEEK)
                 totals[pid] = totals.get(pid, 0.0) + per_week * weeks_missing
         return {k: round(v, 2) for k, v in totals.items()}
 
