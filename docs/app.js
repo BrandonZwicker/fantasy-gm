@@ -357,8 +357,7 @@ function render(r, { isExample }) {
 
   app().appendChild(node(`<div class="byline">
     Built by Brandon Zwicker · projections re-scored under each league's own
-    settings · runs entirely in your browser against Sleeper's public API ·
-    <a href="https://github.com/BrandonZwicker/fantasy-gm">source on GitHub</a>
+    settings · <a href="https://github.com/BrandonZwicker/fantasy-gm">source on GitHub</a>
   </div>`));
 
   document.getElementById('refresh').onclick = () => run(true);
@@ -384,7 +383,6 @@ function render(r, { isExample }) {
 function loading(name) {
   app().innerHTML = `<div class="loading">
     <div class="mark">Reading ${esc((name || 'your league').trim())}</div>
-    <p>No server involved — this is computing in your browser.</p>
     <div class="prog" id="prog"></div>
     <div class="bar"><i></i></div></div>`;
 }
