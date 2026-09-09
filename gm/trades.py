@@ -235,12 +235,26 @@ def find_trades(state: LeagueState, ros: dict[str, float],
     grouped.sort(key=lambda t: -(t.my_gain * accept_weight.get(t.acceptance, 0.3)
                                  + t.their_gain * 0.03))
 
-    # And a player you have already agreed to receive can't be received twice.
+    # The shortlist has to be executable as a whole, not just pairwise valid.
+    # Two separately sensible offers can send both your quarterbacks and leave
+    # you unable to field a lineup, so each is applied to a running roster and
+    # rejected if it breaks legality.
     seen_recv: set[str] = set()
+    sent_all: set[str] = set()
+    sim = dict(my_pts)
     final: list[TradeIdea] = []
     for i in grouped:
         if any(p in seen_recv for p in i.receive):
             continue
+        if any(p in sent_all for p in i.send):
+            continue
+        after = _swap(sim, i.send, i.receive, ros)
+        from .lineup import optimize as _optimize
+        lu = _optimize(state.rules, after, state.positions_map(after))
+        if any(s.player_id is None for s in lu.slots):
+            continue  # would leave a starting slot empty
+        sim = after
+        sent_all |= set(i.send)
         seen_recv |= set(i.receive)
         final.append(i)
         if len(final) >= limit:
