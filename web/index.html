@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy GM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F6F4F0; --surface:#FFFFFF; --sunk:#FAF9F6;
+  --ink:#17181D; --ink-2:#4A4D57; --ink-3:#8B8F9A;
+  --line:#E7E3DC; --line-2:#F0EDE7;
+  --accent:#3D3AE0; --accent-soft:#EEEEFC;
+  --gain:#0B8F63; --gain-soft:#E6F4EE;
+  --urgent:#C9412C; --urgent-soft:#FBEBE7;
+  --amber:#B4721A; --amber-soft:#FBF1E0;
+  --shadow:0 1px 2px rgba(20,18,14,.04), 0 12px 28px -16px rgba(20,18,14,.18);
+  --display:'Instrument Serif', Georgia, 'Times New Roman', serif;
+  --sans:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --r:16px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#111214; --surface:#191A1E; --sunk:#1F2126;
+    --ink:#F2F0EC; --ink-2:#B6B8BF; --ink-3:#7C808A;
+    --line:#2A2C32; --line-2:#232529;
+    --accent:#8E8BFF; --accent-soft:#23233A;
+    --gain:#48C79A; --gain-soft:#173029;
+    --urgent:#F0806A; --urgent-soft:#33201C;
+    --amber:#E0A455; --amber-soft:#2E2417;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 28px -16px rgba(0,0,0,.7);
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0}
+
+/* ---------- header ---------- */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--paper) 88%,transparent);
+  backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid var(--line)}
+.top-in{max-width:1180px;margin:0 auto;padding:14px 24px;
+  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.brand{font:400 25px/1.1 var(--display);letter-spacing:-.01em}
+.brand em{font-style:italic;color:var(--accent)}
+.crumb{color:var(--ink-3);font-size:13.5px;font-weight:500}
+.crumb b{color:var(--ink-2);font-weight:600}
+.grow{flex:1}
+.tools{display:flex;gap:8px;align-items:center}
+.btn{font:500 13px var(--sans);padding:8px 14px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  transition:.15s ease}
+.btn:hover:not(:disabled){border-color:var(--ink-3);color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.solid{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.btn.solid:hover:not(:disabled){opacity:.86;color:var(--paper)}
+.btn.quiet{border-color:transparent;background:none;color:var(--ink-3)}
+
+/* ---------- layout ---------- */
+main{max-width:1180px;margin:0 auto;padding:24px}
+.cols{display:grid;grid-template-columns:1fr 372px;gap:22px;align-items:start}
+@media(max-width:980px){.cols{grid-template-columns:1fr}}
+
+/* ---------- hero ---------- */
+.hero{background:var(--surface);border-radius:var(--r);box-shadow:var(--shadow);
+  padding:26px 28px;margin-bottom:22px;display:flex;align-items:center;gap:26px;flex-wrap:wrap}
+.hero .fig{font:400 58px/.9 var(--display);letter-spacing:-.02em;color:var(--gain)}
+.hero .fig.flat{color:var(--ink-3)}
+.hero .say{flex:1;min-width:240px}
+.hero .say h2{font:400 23px/1.25 var(--display);letter-spacing:-.01em;margin-bottom:4px}
+.hero .say p{margin:0;color:var(--ink-2);font-size:14px}
+.hero .meta{display:flex;gap:22px;flex-wrap:wrap;padding-left:22px;
+  border-left:1px solid var(--line-2)}
+.hero .meta div{min-width:74px}
+.hero .meta .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--ink-3);font-weight:600;margin-bottom:3px}
+.hero .meta .v{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* ---------- cards ---------- */
+.card{background:var(--surface);border-radius:var(--r);box-shadow:var(--shadow);
+  margin-bottom:22px;overflow:hidden}
+.card > header{padding:17px 22px 13px;display:flex;align-items:baseline;gap:10px}
+.card > header h3{font:400 19px/1.2 var(--display);letter-spacing:-.01em}
+.card > header .note{color:var(--ink-3);font-size:12.5px;margin-left:auto;font-weight:500}
+.card .in{padding:0 22px 18px}
+
+/* ---------- actions ---------- */
+.act{padding:15px 0;border-top:1px solid var(--line-2)}
+.act:first-child{border-top:0;padding-top:4px}
+.act .line{display:flex;gap:11px;align-items:flex-start}
+.rk{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:grid;
+  place-items:center;font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;
+  background:var(--sunk);color:var(--ink-3);margin-top:1px}
+.rk.top{background:var(--ink);color:var(--paper)}
+.meta-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:7px 0 0 90px}
+.pillx{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;
+  background:var(--sunk);color:var(--ink-2)}
+.pillx.pts{background:var(--gain-soft);color:var(--gain)}
+.pillx.when{background:transparent;color:var(--ink-3);padding-left:0}
+.disc{margin:9px 0 0 90px;display:flex;gap:16px;flex-wrap:wrap}
+.disc details{flex:1 1 100%}
+.disc summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--accent);
+  list-style:none;display:inline-flex;align-items:center;gap:5px;padding:3px 0}
+.disc summary::-webkit-details-marker{display:none}
+.disc summary::before{content:'▸';font-size:10px;transition:transform .15s}
+.disc details[open] summary::before{transform:rotate(90deg)}
+.rz{margin-top:8px;padding:14px 16px;background:var(--sunk);border-radius:12px}
+.rz .st{padding:9px 0;border-top:1px solid var(--line-2)}
+.rz .st:first-child{border-top:0;padding-top:0}
+.rz .st h5{margin:0 0 3px;font-size:12px;font-weight:700;letter-spacing:.02em;
+  color:var(--ink)}
+.rz .st p{margin:0;font-size:13px;color:var(--ink-2);line-height:1.6}
+.chip{flex:0 0 auto;font:700 9.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;
+  padding:4px 9px;border-radius:999px;margin-top:2px}
+.chip.t1{background:var(--urgent-soft);color:var(--urgent)}
+.chip.t2{background:var(--amber-soft);color:var(--amber)}
+.chip.t3{background:var(--accent-soft);color:var(--accent)}
+.chip.t4{background:var(--sunk);color:var(--ink-3)}
+.act h4{font-size:15px;font-weight:600;line-height:1.4;letter-spacing:-.005em}
+.act p{margin:4px 0 0;color:var(--ink-2);font-size:13.5px}
+.alts{margin:0}
+.alts summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--accent);
+  list-style:none;display:inline-flex;align-items:center;gap:5px;padding:3px 0}
+.alts summary::-webkit-details-marker{display:none}
+.alts summary::before{content:'▸';font-size:10px;transition:transform .15s}
+.alts[open] summary::before{transform:rotate(90deg)}
+.alts .opt{padding:9px 12px;margin-top:7px;background:var(--sunk);
+  border-radius:10px;font-size:13px}
+.alts .opt b{font-weight:600}
+.alts .opt span{color:var(--ink-3);display:block;margin-top:2px;font-size:12.5px}
+.allclear{padding:22px 0 8px;text-align:center;color:var(--ink-3);font-size:14px}
+.allclear .big{font:400 34px/1 var(--display);color:var(--gain);display:block;margin-bottom:8px}
+
+/* ---------- tables ---------- */
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--ink-3);font-weight:700;padding:0 8px 9px;border-bottom:1px solid var(--line-2)}
+td{padding:9px 8px;border-bottom:1px solid var(--line-2);font-size:13.5px}
+tr:last-child td{border-bottom:0}
+.slot{display:inline-block;min-width:44px;padding:3px 8px;border-radius:6px;
+  background:var(--sunk);color:var(--ink-2);font-size:10.5px;font-weight:700;
+  letter-spacing:.07em;text-align:center}
+.slot.bn{background:transparent;color:var(--ink-3);font-weight:600}
+tr.bench td{opacity:.55}
+.who b{font-weight:600}
+.who span{color:var(--ink-3);font-size:12px;margin-left:5px}
+.hurt{color:var(--urgent);font-size:11px;font-weight:600;margin-left:5px}
+.n{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;
+  font-size:14px;white-space:nowrap}
+.n.dim{color:var(--ink-3);font-weight:500}
+.n.up{color:var(--gain)}
+.cost{font-variant-numeric:tabular-nums;font-weight:700;color:var(--gain)}
+.cost.pri{color:var(--accent)}
+.vacant{color:var(--urgent);font-style:italic}
+
+/* ---------- trades ---------- */
+.deal{padding:15px 0;border-top:1px solid var(--line-2)}
+.deal:first-child{border-top:0;padding-top:4px}
+.deal .hdr{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.deal .hdr b{font-size:14.5px;font-weight:600}
+.tagx{font:700 9.5px var(--sans);letter-spacing:.09em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px}
+.tagx.likely{background:var(--gain-soft);color:var(--gain)}
+.tagx.possible{background:var(--amber-soft);color:var(--amber)}
+.tagx.longshot{background:var(--sunk);color:var(--ink-3)}
+.swap{display:grid;grid-template-columns:52px 1fr;gap:5px 10px;font-size:13.5px}
+.swap .lb{font-size:10px;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--ink-3);font-weight:700;padding-top:3px}
+.swap .out{color:var(--urgent)}
+.swap .inn{color:var(--gain)}
+.deal .why{margin:9px 0 0;color:var(--ink-2);font-size:12.5px}
+
+/* ---------- feed ---------- */
+.ev{padding:11px 0;border-top:1px solid var(--line-2);font-size:13.5px;
+  display:flex;gap:10px;align-items:flex-start}
+.ev:first-child{border-top:0}
+.dot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;margin-top:6px;background:var(--ink-3)}
+.dot.critical,.dot.high{background:var(--urgent)}
+.dot.medium{background:var(--amber)}
+.you{font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--accent);
+  background:var(--accent-soft);padding:2px 6px;border-radius:5px;margin-left:6px}
+
+/* ---------- rules list ---------- */
+.rules{list-style:none;margin:0;padding:0}
+.rules li{padding:9px 0;border-top:1px solid var(--line-2);font-size:13px;color:var(--ink-2)}
+.rules li:first-child{border-top:0}
+
+/* ---------- notice ---------- */
+.notice{background:var(--sunk);border-radius:12px;padding:15px 17px;
+  font-size:13.5px;color:var(--ink-2);line-height:1.6}
+
+/* ---------- setup ---------- */
+.gate{max-width:470px;margin:9vh auto;padding:0 24px}
+.gate .mark{font:400 44px/1 var(--display);letter-spacing:-.02em;margin-bottom:10px}
+.gate .mark em{font-style:italic;color:var(--accent)}
+.gate .lede{color:var(--ink-2);font-size:14.5px;margin:0 0 26px}
+.field{width:100%;padding:13px 16px;background:var(--surface);color:var(--ink);
+  border:1px solid var(--line);border-radius:12px;font:15px var(--sans);margin-bottom:10px}
+.field:focus{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft)}
+.gate .btn{width:100%;padding:13px;font-size:14.5px;font-weight:600}
+.opt-row{display:flex;justify-content:space-between;align-items:center;gap:12px;
+  padding:14px 16px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;margin-bottom:9px;cursor:pointer;transition:.15s ease}
+.opt-row:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:var(--shadow)}
+.opt-row b{font-size:14.5px;font-weight:600}
+.opt-row .s{color:var(--ink-3);font-size:12.5px;margin-top:2px}
+.opt-row .arw{color:var(--ink-3)}
+.rule{display:flex;align-items:center;gap:12px;color:var(--ink-3);
+  font-size:12px;margin:22px 0 14px}
+.rule::before,.rule::after{content:'';flex:1;height:1px;background:var(--line)}
+.warn{background:var(--urgent-soft);color:var(--urgent);padding:12px 15px;
+  border-radius:11px;font-size:13.5px;margin-bottom:16px}
+.loading{max-width:470px;margin:16vh auto;text-align:center;padding:0 24px}
+.loading .mark{font:400 30px/1.2 var(--display);margin-bottom:10px}
+.loading p{color:var(--ink-3);font-size:13.5px}
+.bar{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:20px}
+.bar i{display:block;height:100%;width:38%;background:var(--accent);border-radius:2px;
+  animation:slide 1.25s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-38%}100%{margin-left:100%}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const node = (h) => { const d=document.createElement('div'); d.innerHTML=h.trim(); return d.firstChild; };
+const esc = (s) => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const KEY = 'fantasy-gm.session';
+const loadSession = () => { try{ return JSON.parse(localStorage.getItem(KEY)) || null; }catch{ return null; } };
+const saveSession = (s) => { try{ localStorage.setItem(KEY, JSON.stringify(s)); }catch{} };
+const clearSession = () => { try{ localStorage.removeItem(KEY); }catch{} };
+
+let SESSION = loadSession();
+let REPORT = null;
+// Set when the user explicitly asks to switch, so the server default
+// doesn't immediately pull them back to the house league.
+let FORCE_SETUP = false;
+
+const pinfo = (id) => REPORT?.player_names?.[id] || {name:id, position:'', team:'', injury:''};
+function who(id){
+  if(!id) return '<span class="vacant">— empty —</span>';
+  const p = pinfo(id);
+  return `<b>${esc(p.name)}</b><span>${esc(p.position)}${p.team?' · '+esc(p.team):''}</span>`
+       + (p.injury?`<span class="hurt">${esc(p.injury)}</span>`:'');
+}
+const plain = (id) => esc(pinfo(id).name);
+
+async function api(path){
+  const r = await fetch(path);
+  if(!r.ok){
+    const j = await r.json().catch(()=>({detail:r.statusText}));
+    throw new Error(j.detail || r.statusText);
+  }
+  return r.json();
+}
+
+// ---------------- setup ----------------
+function renderGate(msg){
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  const g = node(`<div class="gate">
+    <div class="mark">Fantasy <em>GM</em></div>
+    <p class="lede">Your league, read end to end — and told exactly what to do about it.
+      Read-only: nothing is ever posted to your Sleeper account.</p>
+    ${msg?`<div class="warn">${esc(msg)}</div>`:''}
+    <input class="field" id="u" placeholder="Sleeper username" autocomplete="off" spellcheck="false">
+    <button class="btn solid" id="go">Find my leagues</button>
+    <div class="rule">or use a league ID</div>
+    <input class="field" id="lid" placeholder="League ID" autocomplete="off">
+    <button class="btn" id="golid">Load that league</button>
+    <div id="out" style="margin-top:18px"></div>
+    <div id="back"></div>
+  </div>`);
+  app.appendChild(g);
+
+  const inp=g.querySelector('#u'), out=g.querySelector('#out'),
+        go=g.querySelector('#go'), lid=g.querySelector('#lid');
+  inp.focus();
+
+  const choose = (username, user_id, l) => {
+    FORCE_SETUP = false;
+    SESSION = {username, user_id, league_id:l.league_id, league_name:l.name};
+    saveSession(SESSION);
+    load();
+  };
+
+  // Offer the server's configured league as a one-click way back.
+  api('/api/default').then(d => {
+    if(!d.linked) return;
+    const back = g.querySelector('#back');
+    back.innerHTML = '<div class="rule">or</div>';
+    const r = node(`<div class="opt-row"><div><b>${esc(d.league_name.trim())}</b>
+      <div class="s">default league · @${esc(d.username)}</div></div>
+      <span class="arw">→</span></div>`);
+    r.onclick = () => choose(d.username, d.user_id,
+                             {league_id:d.league_id, name:d.league_name});
+    back.appendChild(r);
+  }).catch(()=>{});
+
+  const byUser = async () => {
+    const u = inp.value.trim(); if(!u) return;
+    go.disabled = true; out.innerHTML = '<p class="lede">Searching…</p>';
+    try{
+      const d = await api('/api/leagues?username='+encodeURIComponent(u));
+      if(!d.leagues.length){
+        out.innerHTML = `<div class="warn">No ${esc(d.season)} leagues for
+          “${esc(u)}”. Try the league ID instead.</div>`;
+      }else{
+        out.innerHTML = '<div class="rule">choose a league</div>';
+        d.leagues.forEach(l => {
+          const r = node(`<div class="opt-row"><div><b>${esc(l.name)}</b>
+            <div class="s">${l.teams} teams · ${esc(d.season)}</div></div>
+            <span class="arw">→</span></div>`);
+          r.onclick = () => choose(u, d.user_id, l);
+          out.appendChild(r);
+        });
+      }
+    }catch(e){ out.innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
+    go.disabled = false;
+  };
+
+  const byLeague = async () => {
+    const id = lid.value.trim(); if(!id) return;
+    out.innerHTML = '<p class="lede">Loading league…</p>';
+    try{
+      const d = await api('/api/members?league_id='+encodeURIComponent(id));
+      out.innerHTML = `<div class="rule">which team is yours in ${esc(d.name)}?</div>`;
+      d.members.forEach(m => {
+        const label = m.team_name || m.display_name;
+        const r = node(`<div class="opt-row"><div><b>${esc(label)}</b>
+          <div class="s">@${esc(m.display_name)}${m.roster_id?' · roster '+m.roster_id:''}</div></div>
+          <span class="arw">→</span></div>`);
+        r.onclick = () => choose(m.display_name, m.user_id, {league_id:id, name:d.name});
+        out.appendChild(r);
+      });
+    }catch(e){ out.innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
+  };
+
+  go.onclick = byUser;
+  inp.onkeydown = e => { if(e.key==='Enter') byUser(); };
+  g.querySelector('#golid').onclick = byLeague;
+  lid.onkeydown = e => { if(e.key==='Enter') byLeague(); };
+}
+
+// ---------------- dashboard ----------------
+function actionHTML(a){
+  const alts = a.payload?.alternatives || [];
+  const why = a.reasoning || [];
+
+  const whyHTML = why.length ? `
+    <details><summary>Why this move?</summary>
+      <div class="rz">${why.map(s=>`<div class="st"><h5>${esc(s.h)}</h5>
+        <p>${esc(s.t)}</p></div>`).join('')}</div>
+    </details>` : '';
+
+  const altHTML = alts.length ? `
+    <details><summary>${alts.length} alternative${alts.length>1?'s':''} — only one of these can happen</summary>
+      <div class="rz">${alts.map(o=>`<div class="st"><h5>${esc(o.label)}</h5>
+        <p>${o.bid?('$'+o.bid+' · '):''}worth ${(+o.net_gain).toFixed(1)} pts${
+          o.drop_name?' · drop '+esc(o.drop_name):''}${
+          o.detail?' — '+esc(o.detail):''}</p></div>`).join('')}</div>
+    </details>` : '';
+
+  const pts = a.impact > 0.05
+    ? `<span class="pillx pts">${a.impact.toFixed(1)} pts at stake</span>` : '';
+  const rate = (a.per_week > 0.05 && a.kind !== 'start_sit')
+    ? `<span class="pillx">${a.per_week.toFixed(1)} / week</span>` : '';
+
+  return `<div class="act">
+    <div class="line">
+      <span class="rk ${a.rank<=2?'top':''}">${a.rank}</span>
+      <span class="chip t${a.priority}">${esc(a.tier_label||'')}</span>
+      <div style="flex:1"><h4>${esc(a.headline)}</h4>
+        ${a.detail?`<p>${esc(a.detail)}</p>`:''}</div>
+    </div>
+    <div class="meta-row">${pts}${rate}
+      ${a.horizon?`<span class="pillx when">${esc(a.horizon)}</span>`:''}</div>
+    ${(whyHTML||altHTML)?`<div class="disc">${whyHTML}${altHTML}</div>`:''}
+  </div>`;
+}
+
+function renderReport(r){
+  REPORT = r;
+  const app = document.getElementById('app');
+  const up = r.lineup_gain > 0.1;
+
+  const hero = `<div class="hero">
+    <div class="fig ${up?'':'flat'}">${up?'+'+r.lineup_gain.toFixed(1):'✓'}</div>
+    <div class="say">
+      <h2>${up ? 'Points left on your bench' : 'Your lineup is set correctly'}</h2>
+      <p>${up ? `Fixing your week ${r.week} lineup is worth ${r.lineup_gain.toFixed(1)} more projected points.`
+              : `Nothing to change for week ${r.week} — the optimal eleven are already starting.`}</p>
+    </div>
+    <div class="meta">
+      <div><div class="k">Record</div><div class="v">${esc(r.record)}</div></div>
+      <div><div class="k">Projected</div><div class="v">${r.lineup?r.lineup.total.toFixed(1):'—'}</div></div>
+      <div><div class="k">${r.uses_faab?'FAAB left':'Priority'}</div>
+        <div class="v">${r.uses_faab?('$'+r.faab_left):('#'+(r.waiver_position||'—'))}</div></div>
+    </div>
+  </div>`;
+
+  const acts = (r.actions||[]).length
+    ? (r.actions||[]).map(actionHTML).join('')
+    : `<div class="allclear"><span class="big">All clear</span>
+        No moves needed right now. Check back after the next games.</div>`;
+
+  const lineup = (r.lineup?.slots||[]).map(s => `
+    <tr><td><span class="slot">${esc(s.slot)}</span></td>
+      <td class="who">${who(s.player_id)}</td>
+      <td class="n">${s.points.toFixed(1)}</td></tr>`).join('');
+  const bench = (r.lineup?.bench||[]).slice(0,8).map(([id,p]) => `
+    <tr class="bench"><td><span class="slot bn">BN</span></td>
+      <td class="who">${who(id)}</td><td class="n dim">${p.toFixed(1)}</td></tr>`).join('');
+
+  const waivers = (r.waivers||[]).length ? (r.waivers||[]).map(w => `
+    <tr><td class="cost ${r.uses_faab?'':'pri'}">${
+        r.uses_faab ? (w.faab_bid?'$'+w.faab_bid:'—') : '#'+(r.waiver_position||'—')}</td>
+      <td class="who"><b>${esc(w.name)}</b><span>${esc(w.position)}${w.team?' · '+esc(w.team):''}</span>
+        ${w.drop_id?`<span style="display:block;color:var(--ink-3);font-size:12px;margin:2px 0 0">drop ${esc(w.drop_name)}</span>`:''}
+        ${w.alternatives?.length?`<span style="display:block;color:var(--ink-3);font-size:11.5px;margin-top:2px">or ${
+          w.alternatives.map(a=>esc(a.name)).join(', ')}</span>`:''}</td>
+      <td class="n up">+${w.marginal_ros.toFixed(1)}</td></tr>`).join('')
+    : '<tr><td colspan="3" style="color:var(--ink-3);padding:14px 8px">No free agent improves your lineup.</td></tr>';
+
+  const deals = (r.trades||[]).length ? (r.trades||[]).map(t => {
+    const cls = t.acceptance==='likely'?'likely':t.acceptance==='possible'?'possible':'longshot';
+    return `<div class="deal">
+      <div class="hdr"><b>${esc(t.partner_name)}</b>
+        <span class="tagx ${cls}">${esc(t.acceptance)}</span>
+        <span style="margin-left:auto;font-size:13px;font-weight:600;color:var(--gain)">+${t.my_gain.toFixed(1)}</span></div>
+      <div class="swap">
+        <div class="lb">send</div><div class="out">${t.send.map(plain).join(', ')}</div>
+        <div class="lb">get</div><div class="inn">${t.receive.map(plain).join(', ')}</div>
+      </div>
+      <p class="why">${esc(t.rationale)}</p></div>`;
+  }).join('') : `<div class="notice">${esc(r.trade_note || 'No mutually beneficial trades right now.')}</div>`;
+
+  const feed = (r.changes||[]).length ? (r.changes||[]).slice(0,20).map(c => `
+    <div class="ev"><span class="dot ${esc(c.severity)}"></span>
+      <div>${esc(c.headline)}${c.affects_me?'<span class="you">YOURS</span>':''}</div></div>`).join('')
+    : '<div class="ev" style="color:var(--ink-3)">Nothing has changed since the last check.</div>';
+
+  const drops = (r.drops||[]).slice(0,5).map(d => `
+    <tr><td class="who">${who(d.player_id)}</td>
+      <td class="n ${d.cost>0?'':'dim'}">${d.cost.toFixed(1)}</td></tr>`).join('');
+
+  app.innerHTML = '';
+  app.appendChild(node(`<div class="top"><div class="top-in">
+    <div class="brand">${esc(r.league_name.trim())}</div>
+    <div class="crumb">Week ${r.week} · <b>${esc(r.my_team)}</b> · ${esc(r.record)}</div>
+    <div class="grow"></div>
+    <div class="crumb">Waivers ${esc(r.next_waiver)}</div>
+    <div class="tools">
+      <button class="btn" id="refresh">Refresh</button>
+      <button class="btn quiet" id="switch">Switch</button>
+    </div>
+  </div></div>`));
+
+  app.appendChild(node(`<main>
+    ${hero}
+    <div class="cols">
+      <div>
+        <div class="card"><header><h3>What to do</h3>
+          <span class="note">${(r.actions||[]).length} item${(r.actions||[]).length===1?'':'s'} · ranked by points at stake and how soon you lose the chance</span></header>
+          <div class="in">${acts}</div></div>
+        <div class="card"><header><h3>Week ${r.week} lineup</h3>
+          <span class="note">${r.lineup?r.lineup.total.toFixed(1):'—'} projected</span></header>
+          <div class="in"><table>
+            <tr><th style="width:64px">Slot</th><th>Player</th><th class="n">Proj</th></tr>
+            ${lineup}${bench}</table></div></div>
+        <div class="card"><header><h3>Trades worth offering</h3></header>
+          <div class="in">${deals}</div></div>
+      </div>
+      <div>
+        <div class="card"><header><h3>Waiver targets</h3></header>
+          <div class="in"><table>
+            <tr><th style="width:52px">${r.uses_faab?'Bid':'Pri'}</th><th>Player</th><th class="n">ROS</th></tr>
+            ${waivers}</table></div></div>
+        <div class="card"><header><h3>Safest drops</h3>
+          <span class="note">points it costs you</span></header>
+          <div class="in"><table>${drops}</table></div></div>
+        <div class="card"><header><h3>What changed</h3></header>
+          <div class="in">${feed}</div></div>
+        <div class="card"><header><h3>House rules</h3></header>
+          <div class="in"><ul class="rules">
+            ${(r.settings_summary||[]).map(s=>`<li>${esc(s)}</li>`).join('')}
+            ${(r.deadlines||[]).map(s=>`<li>${esc(s)}</li>`).join('')}</ul></div></div>
+      </div>
+    </div>
+  </main>`));
+
+  document.getElementById('refresh').onclick = () => load(true);
+  document.getElementById('switch').onclick = () => {
+    clearSession(); SESSION=null; REPORT=null; FORCE_SETUP=true; renderGate();
+  };
+}
+
+async function load(force){
+  const app = document.getElementById('app');
+
+  // No choice in this browser yet: fall back to the league configured on the
+  // server (`cli.py link`). Anyone else can still switch to their own.
+  if(!SESSION && !FORCE_SETUP){
+    try{
+      const d = await api('/api/default');
+      if(d.linked) SESSION = {username:d.username, user_id:d.user_id,
+                              league_id:d.league_id, league_name:d.league_name};
+    }catch{}
+  }
+  if(!SESSION) return renderGate();
+
+  if(!REPORT || force){
+    app.innerHTML = `<div class="loading">
+      <div class="mark">Reading ${esc((SESSION.league_name||'your league').trim())}</div>
+      <p>Scoring every NFL player under your league's exact rules${force?', fresh from Sleeper':''}.</p>
+      <div class="bar"><i></i></div></div>`;
+  }
+  try{
+    const q = new URLSearchParams({league_id:SESSION.league_id, user_id:SESSION.user_id});
+    if(force) q.set('force','true');
+    renderReport(await api('/api/report?'+q));
+  }catch(e){
+    clearSession(); SESSION=null; FORCE_SETUP=true;
+    renderGate(e.message);
+  }
+}
+load();
+</script>
+</body>
+</html>
