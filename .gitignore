@@ -1,0 +1,14 @@
+# virtualenv
+.venv/
+__pycache__/
+*.pyc
+
+# cached Sleeper responses (hundreds of MB) and local state
+data/cache/
+data/*.db
+
+# personal: which league/account this instance defaults to
+data/config.json
+
+.DS_Store
+.claude/
