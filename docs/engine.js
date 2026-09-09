@@ -440,7 +440,14 @@ export class ProjectionBook {
 /* ---------------- assembled league state ---------------- */
 
 export class LeagueState {
-  static async load(leagueId, userId, { anonymize = false } = {}) {
+  /** `source` supplies league/rosters/users directly (used by the bundled
+   *  example league); omit it to read a live league from Sleeper. */
+  static async load(leagueId, userId, { anonymize = false, source = null } = {}) {
+    if (source) {
+      const state = await Sleeper.state();
+      return new LeagueState(source.league, source.rosters || [],
+                             source.users || [], state, userId, anonymize);
+    }
     const [raw, rosters, users, state] = await Promise.all([
       Sleeper.league(leagueId), Sleeper.rosters(leagueId),
       Sleeper.leagueUsers(leagueId), Sleeper.state(),

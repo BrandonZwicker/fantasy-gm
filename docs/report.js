@@ -24,9 +24,10 @@ const tierOf = (w) => {
 };
 
 export async function buildReport(leagueId, userId, { anonymize = false,
+                                                      source = null,
                                                       onProgress = () => {} } = {}) {
   onProgress('Reading league settings…');
-  const state = await LeagueState.load(leagueId, userId, { anonymize });
+  const state = await LeagueState.load(leagueId, userId, { anonymize, source });
   const rules = state.rules;
   const week = state.currentWeek;
   const me = state.me;
@@ -249,8 +250,13 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
       }
     }
     const acceptFactor = { likely: 1, possible: 0.7, 'long shot': 0.4 };
+    const startingThisWeek = new Set(lineup ? lineup.starterIds() : []);
     for (const t of trades.slice(0, 4)) {
       const perWeek = t.my_gain / weeksLeft;
+      // A trade chip who is also in this week's lineup isn't a contradiction,
+      // but the ordering matters and is worth saying out loud.
+      const alsoStarting = t.send.filter(p => startingThisWeek.has(p))
+                                 .map(p => state.players.name(p));
       actions.push({
         kind: 'trade',
         headline: `OFFER ${t.partner_name}: ${t.summary}`,
@@ -267,6 +273,12 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
         weight: perWeek * URGENCY.trade * (acceptFactor[t.acceptance] ?? 0.5),
         horizon: `Trade deadline week ${rules.tradeDeadlineWeek}`,
         reasoning: [
+          ...(alsoStarting.length ? [{ h: 'Set your lineup first', t:
+            `${alsoStarting.join(' and ')} ${alsoStarting.length > 1 ? 'are' : 'is'} `
+            + `in your week ${week} lineup. Trades take days to negotiate and `
+            + `lineups lock at kickoff, so start ${alsoStarting.length > 1 ? 'them' : 'him'} `
+            + `this week and let the offer run — just replace `
+            + `${alsoStarting.length > 1 ? 'them' : 'him'} if it is accepted first.` }] : []),
           { h: 'What you gain', t:
             `Your starting lineup improves by ${t.my_gain.toFixed(1)} points `
             + `rest-of-season — about ${perWeek.toFixed(1)} per week over the `

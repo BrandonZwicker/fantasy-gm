@@ -443,10 +443,21 @@ export function findTrades(state, ros, levels, {
   }
   grouped.sort((a, b) => rank(a) - rank(b));
 
-  const seenRecv = new Set();
+  // The shortlist has to be executable as a whole, not just pairwise valid.
+  // Two separately sensible offers can send both your quarterbacks and leave
+  // you unable to field a lineup, so each is applied to a running roster and
+  // rejected if it breaks legality.
+  const seenRecv = new Set(), sentAll = new Set();
+  let sim = { ...myPts };
   const final = [];
   for (const i of grouped) {
     if (i.receive.some(p => seenRecv.has(p))) continue;
+    if (i.send.some(p => sentAll.has(p))) continue;
+    const after = swapRoster(sim, i.send, i.receive, ros);
+    const lu = optimize(rules, after, state.positionsMap(after));
+    if (lu.slots.some(s => !s.player_id)) continue;   // would leave a slot empty
+    sim = after;
+    i.send.forEach(p => sentAll.add(p));
     i.receive.forEach(p => seenRecv.add(p));
     final.push(i);
     if (final.length >= limit) break;

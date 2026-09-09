@@ -12,6 +12,13 @@ build step and no API key: it calls Sleeper's public API directly, re-scores
 every projection under your league's scoring dictionary, and solves the
 optimisation client-side.
 
+The site opens on a sign-in page. Enter a Sleeper username to load your own
+league, or open the bundled **example league** — a full 12-team half-PPR,
+TE-premium, FAAB league with real players and live projections, drafted with
+this project's own value-over-replacement model. Results are laid out in
+sections (Overview, Lineup, Waivers, Trades, Activity, League), or as a single
+scrollable page if you prefer.
+
 ---
 
 ## Why league-specific scoring matters
@@ -73,6 +80,30 @@ Several of these were bugs the naive version shipped happily:
   lists positionally produces advice like "start this QB over that tight end".
 - **Pure slot shuffles are suppressed.** Moving an RB between the RB and FLEX
   slots never changes your score; suggesting it is noise, not advice.
+- **The trade shortlist is checked as a whole, not pairwise.** Two individually
+  sensible offers can send both of your quarterbacks. Each candidate is applied
+  to a running roster and rejected if the result can no longer field a lineup.
+
+## Platform support
+
+**Sleeper works.** Its API is unauthenticated and sends
+`access-control-allow-origin: *`, so the browser can call it directly.
+
+**Yahoo does not, and cannot from a static site.** Two independent blockers:
+
+1. Yahoo's fantasy API returns no `access-control-allow-origin` header at all —
+   an `OPTIONS` preflight answers `401` with no CORS headers — so a browser
+   refuses the request before sending it. Being logged in does not help.
+2. Yahoo requires OAuth2, whose token exchange needs a client *secret*.
+   Everything shipped to a static site is public, so the secret would leak.
+
+Both are solved by a small server-side proxy (a Cloudflare Worker or Vercel
+function) that holds the secret, performs the OAuth handshake, and forwards
+responses with CORS headers. The engine is deliberately platform-agnostic —
+`docs/providers.js` defines the shape a platform must supply, and the rest of
+the code only ever sees rosters, scoring settings and projections. Adding Yahoo
+is a proxy plus a provider, not a rewrite. The UI states this limitation
+plainly rather than hiding the option.
 
 ## Architecture
 
@@ -81,7 +112,9 @@ docs/            the deployed static site (GitHub Pages)
   engine.js      Sleeper client, league rules, scoring, lineup DP, VOR
   advice.js      waivers, trades, change detection
   report.js      orchestration, ranking, generated reasoning
+  providers.js   platform capabilities (Sleeper live, Yahoo's constraints)
   app.js         UI
+  demo-league.json  the bundled example league
 gm/              Python reference implementation
 tests/           end-to-end tests against a synthetic league
 ```
@@ -116,5 +149,7 @@ Sleeper has no public write API, so nothing here can submit a waiver claim, set
 a lineup or send a trade. It tells you exactly what to do; you tap it into the
 app. Everything up to the click is automated.
 
-The example league shown by default anonymises other managers to "Team N" —
-their Sleeper handles aren't mine to publish.
+The example league is self-contained: real players and live projections, but
+invented managers and an invented league. No real person's league or Sleeper
+handle appears anywhere on the site. If you load a Sleeper league of your own,
+that data stays in your browser — there is no server to send it to.
