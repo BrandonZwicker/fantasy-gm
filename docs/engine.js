@@ -515,8 +515,11 @@ export class LeagueState {
   static async load(leagueId, userId, { anonymize = false, source = null } = {}) {
     if (source) {
       const state = await Sleeper.state();
-      return new LeagueState(source.league, source.rosters || [],
-                             source.users || [], state, userId, anonymize);
+      const ls = new LeagueState(source.league, source.rosters || [],
+                                 source.users || [], state, userId, anonymize);
+      // Not a real Sleeper league, so league-scoped endpoints would 404.
+      ls.isLocal = true;
+      return ls;
     }
     const [raw, rosters, users, state] = await Promise.all([
       Sleeper.league(leagueId), Sleeper.rosters(leagueId),
@@ -568,6 +571,7 @@ export class LeagueState {
       };
     }
 
+    this.isLocal = false;
     this.myRosterId = null;
     for (const id in this.teams) {
       if (this.teams[id].owner_id === userId) { this.myRosterId = Number(id); break; }
