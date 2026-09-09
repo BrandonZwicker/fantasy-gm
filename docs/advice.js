@@ -538,9 +538,10 @@ export async function detectChanges(state) {
   }
   writeSnap(lid, 'injuries', inj);
 
-  // Completed league transactions.
+  // Completed league transactions. Skipped for the bundled example league,
+  // whose id does not exist on Sleeper.
   try {
-    const txs = await Sleeper.transactions(lid, state.currentWeek);
+    const txs = state.isLocal ? [] : await Sleeper.transactions(lid, state.currentWeek);
     const seenTx = new Set(readSnap(lid, 'tx') || []);
     const nowTx = [];
     for (const tx of txs || []) {
