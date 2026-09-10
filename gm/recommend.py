@@ -30,6 +30,20 @@ URGENCY = {
     "info": 0.35,    # context, not a move
 }
 
+# How big an edge has to be before a move is worth making. Weekly projections
+# carry several points of error, so a move gaining 0.8 projected points sits
+# inside the noise -- as likely to cost you as to gain. Warnings (a bye, an
+# injured starter) are never filtered: those are certainties, not edges.
+RISK_PROFILES = {
+    "cautious":   {"label": "Cautious",   "start_sit": 3.0,
+                   "waiver_per_week": 1.0, "trade_gain": 10.0},
+    "balanced":   {"label": "Balanced",   "start_sit": 1.5,
+                   "waiver_per_week": 0.4, "trade_gain": 5.0},
+    "aggressive": {"label": "Aggressive", "start_sit": 0.3,
+                   "waiver_per_week": 0.1, "trade_gain": 2.0},
+}
+DEFAULT_RISK = "balanced"
+
 TIERS = [
     (6.0, 1, "Do now"),
     (2.0, 2, "This week"),
@@ -83,6 +97,8 @@ class Report:
     next_waiver: str
     deadlines: list[str]
     trade_note: str = ""
+    risk: str = DEFAULT_RISK
+    held_back: int = 0
     waiver_type: str = "none"      # faab | rolling | reverse | none
     uses_faab: bool = False
     waiver_position: int = 0
@@ -110,7 +126,7 @@ def _next_waiver_run(rules) -> str:
 
 def build_report(league_id: str, user_id: str | None = None, *,
                  force: bool = False, do_trades: bool = True,
-                 con=None) -> Report:
+                 risk: str = DEFAULT_RISK, con=None) -> Report:
     s = Sleeper()
     state = LeagueState(s, league_id, user_id=user_id, force=force)
     rules = state.rules
@@ -139,6 +155,7 @@ def build_report(league_id: str, user_id: str | None = None, *,
                                 {"critical": 0, "high": 1, "medium": 2}.get(c.severity, 3)))
 
     actions: list[Action] = []
+    floor = RISK_PROFILES.get(risk, RISK_PROFILES[DEFAULT_RISK])
     next_waiver_txt = _next_waiver_run(rules)
     lineup = None
     lineup_gain = 0.0
@@ -315,7 +332,8 @@ def build_report(league_id: str, user_id: str | None = None, *,
 
         # ---- trades ----
         if do_trades:
-            trades = find_trades(state, ros, levels, limit=6)
+            trades = find_trades(state, ros, levels, limit=6,
+                                 min_my_gain=floor["trade_gain"])
             if not trades:
                 # Say why rather than showing an empty panel. Naming the
                 # chip is the actionable part: it's who to shop.
@@ -399,6 +417,20 @@ def build_report(league_id: str, user_id: str | None = None, *,
                     + " Detected by comparing the league against the last check."}],
             ))
 
+    # Drop moves whose edge is too small to be worth acting on. Warnings stay:
+    # a bye week is a certainty, not a projected edge.
+    def _below_floor(a: Action) -> bool:
+        if a.kind == "start_sit":
+            return a.impact < floor["start_sit"]
+        if a.kind == "waiver":
+            return a.per_week < floor["waiver_per_week"]
+        if a.kind == "trade":
+            return a.impact < floor["trade_gain"]
+        return False
+
+    held_back = sum(1 for a in actions if _below_floor(a))
+    actions = [a for a in actions if not _below_floor(a)]
+
     # Rank everything on one scale: points at stake, weighted by how soon the
     # chance to act disappears. This is what orders the list.
     actions.sort(key=lambda a: -a.weight)
@@ -429,6 +461,7 @@ def build_report(league_id: str, user_id: str | None = None, *,
         lineup=lineup, current_starters=current_starters,
         lineup_gain=lineup_gain, actions=actions, waivers=waivers,
         drops=drops, trades=trades, changes=changes, trade_note=trade_note,
+        risk=risk, held_back=held_back,
         faab_left=faab_left, next_waiver=next_waiver_txt,
         deadlines=deadlines,
         waiver_type=rules.waiver_type, uses_faab=rules.uses_faab,
