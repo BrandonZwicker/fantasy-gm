@@ -91,32 +91,77 @@ def check_scoring_on_actuals(rules, rows) -> bool:
     return rate >= 0.995
 
 
-def check_projection_calibration(rules, rows) -> bool:
-    """Projections must now track Sleeper's own headline number.
+def check_projection_accuracy(rules, s, pi) -> bool:
+    """Measure projections against what actually happened.
 
-    Sleeper's projected pts_ppr is a separately modelled figure rather than the
-    dot product of its own components, so scoring the components alone
-    understates QBs and kickers. `score_projection` adds back the difference;
-    this confirms it closes the gap without disturbing the positions that were
-    already correct.
+    Reproducing Sleeper's numbers proves the scoring engine is right; it says
+    nothing about whether the projections are any good. This compares each
+    week's projection to that week's real result, and checks that the decision
+    to adopt Sleeper's headline figure for kickers only is the better one --
+    applying it to quarterbacks made them measurably worse.
     """
-    print("\n  Engine vs Sleeper, PROJECTIONS — before and after calibration")
-    print(f"    {'position':<10}{'n':>6}{'raw gap':>10}{'raw sd':>9}"
-          f"{'calibrated':>12}{'cal sd':>9}")
-    worst_after = 0.0
+    import math
+
+    raw = defaultdict(list)
+    shipped = defaultdict(list)
+    full = defaultdict(list)
+    for w in range(1, 15):
+        proj = {str(r["player_id"]): r for r in (s.projections(SEASON, w) or [])}
+        act = {str(r["player_id"]): r for r in (s.stats(SEASON, w) or [])}
+        for pid, pr in proj.items():
+            a = act.get(pid)
+            if not a:
+                continue
+            ps, as_ = pr.get("stats") or {}, a.get("stats") or {}
+            if not ps.get("gp") or not as_.get("gp"):
+                continue
+            p = pi.get(pid)
+            if not p or p.position not in STARTABLE:
+                continue
+            actual = rules.score(as_)
+            r_raw = rules.score(ps)                                   # components only
+            r_ship = rules.score_projection(ps, p.position)           # what ships
+            r_full = rules.score_projection(ps)                       # calibrate everything
+            if max(r_raw, r_ship) < 4:
+                continue
+            raw[p.position].append(actual - r_raw)
+            shipped[p.position].append(actual - r_ship)
+            full[p.position].append(actual - r_full)
+
+    rmse = lambda v: math.sqrt(sum(x * x for x in v) / len(v))
+    bias = lambda v: sum(v) / len(v)
+
+    print("\n  Projection accuracy vs actual results")
+    print(f"    {'pos':<5}{'n':>6}{'bias':>9}{'RMSE':>8}   "
+          f"{'raw':>7}{'all-cal':>9}   choice")
+    ok = True
     for pos in STARTABLE:
-        sel = [st for p, st in rows if p.position == pos and st["pts_ppr"] > 3]
-        if len(sel) < 20:
+        if len(shipped[pos]) < 50:
             continue
-        raw = [st["pts_ppr"] - rules.score(st) for st in sel]
-        cal = [st["pts_ppr"] - rules.score_projection(st) for st in sel]
-        worst_after = max(worst_after, abs(mean(cal)))
-        print(f"    {pos:<10}{len(sel):>6}{mean(raw):>+10.3f}{pstdev(raw):>9.3f}"
-              f"{mean(cal):>+12.3f}{pstdev(cal):>9.3f}")
-    ok = worst_after < 0.05
-    print(f"\n    largest remaining mean gap: {worst_after:.4f}"
-          + ("  ✓" if ok else "  — still diverging"))
+        r_s, r_r, r_f = rmse(shipped[pos]), rmse(raw[pos]), rmse(full[pos])
+        best = min(r_s, r_r, r_f)
+        good = r_s <= best + 0.02
+        if not good:
+            ok = False
+        print(f"    {pos:<5}{len(shipped[pos]):>6}{bias(shipped[pos]):>9.2f}"
+              f"{r_s:>8.2f}   {r_r:>7.2f}{r_f:>9.2f}   "
+              + ("best ✓" if good else "NOT BEST — review"))
+
+    print("\n    'raw' scores only the itemised components; 'all-cal' adopts")
+    print("    Sleeper's headline projection everywhere. What ships adopts it")
+    print("    for kickers alone, which the middle column has to justify.")
     return ok
+
+
+def check_edge_confidence() -> None:
+    """Report what a projected edge is actually worth, in odds."""
+    import math
+    sd = 6.8 * math.sqrt(2)
+    phi = lambda z: 0.5 * (1 + math.erf(z / math.sqrt(2)))
+    print("\n  What a projected edge is worth (skill-position SD 6.8)")
+    print(f"    {'edge':>6}{'odds it is the better start':>32}")
+    for e in (1.0, 1.5, 2.5, 5.0, 8.0):
+        print(f"    {e:>6.1f}{100 * phi(e / sd):>31.1f}%")
 
 
 def brute_force_lineup(rules, cands, positions):
@@ -178,15 +223,17 @@ def main() -> int:
           f"({SEASON}, weeks {WEEKS[0]}–{WEEKS[-1]})")
 
     scoring_ok = check_scoring_on_actuals(rules, actual)
-    projection_ok = check_projection_calibration(rules, proj)
+    projection_ok = check_projection_accuracy(rules, s, pi)
+    check_edge_confidence()
     optimizer_ok = check_optimizer()
 
     print()
     ok = scoring_ok and projection_ok and optimizer_ok
     print(f"VERDICT: {'PASS' if ok else 'FAIL'} — "
           f"scoring {'reproduces' if scoring_ok else 'does NOT reproduce'} Sleeper "
-          f"exactly on real stats; projections {'track' if projection_ok else 'DIVERGE from'} "
-          f"Sleeper's own figure; optimiser {'exact' if optimizer_ok else 'MISMATCHED'}")
+          f"exactly on real stats; projection settings "
+          f"{'are the most accurate option' if projection_ok else 'are NOT optimal'}; "
+          f"optimiser {'exact' if optimizer_ok else 'MISMATCHED'}")
     return 0 if ok else 1
 
 
