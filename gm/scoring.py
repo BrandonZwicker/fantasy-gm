@@ -55,6 +55,18 @@ REFERENCE_PPR = {
 # score ~0 under it), so no residual can be attributed.
 _MIN_REFERENCE = 0.5
 
+# Sleeper's headline projection is a separate model from its own components, so
+# trusting it is only worth doing where it is actually more accurate. Measured
+# against 2025 results (weeks 1-14), adopting it cuts kicker RMSE from 4.84 to
+# 4.70, but pushes quarterbacks from 7.53 to 8.00 — their QB number runs about
+# 2.2 points hot. So it is applied to kickers only.
+CALIBRATED_POSITIONS = {"K"}
+
+# Standard deviation of weekly projection error, measured the same way. Used to
+# turn a projected edge into the odds it is real.
+PROJECTION_SD = {"QB": 7.5, "RB": 6.8, "WR": 6.8, "TE": 6.0, "K": 4.7, "DEF": 6.0}
+DEFAULT_SD = 6.8
+
 # Rough scarcity ordering used to break ties when filling flex slots.
 _SLOT_FLEXIBILITY = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "K": 0, "DEF": 0}
 
@@ -105,7 +117,8 @@ class LeagueRules:
                     continue
         return total
 
-    def score_projection(self, stats: dict[str, float] | None) -> float:
+    def score_projection(self, stats: dict[str, float] | None,
+                         position: str | None = None) -> float:
         """Score a projection, trusting Sleeper's own headline number.
 
         Sleeper's projected ``pts_ppr`` is a separately modelled figure, not the
@@ -127,6 +140,8 @@ class LeagueRules:
         if not stats:
             return 0.0
         own = self._dot(stats, self.scoring)
+        if position is not None and position not in CALIBRATED_POSITIONS:
+            return round(own, 2)
         sleeper = stats.get("pts_ppr")
         if sleeper is None:
             return round(own, 2)

@@ -40,13 +40,20 @@ teams. Offers that would look insulting get filtered out rather than shown.
 lose the chance to act. Lineup changes lock at kickoff, so they outrank trades
 with weeks of runway.
 
-**Risk setting.** A move that gains 0.8 projected points isn't worth making —
-weekly projections carry a few points of error, so an edge that small is as
-likely to cost you as gain you. There's a Cautious / Balanced / Aggressive
-toggle that sets how big an edge has to be before something gets recommended.
-Balanced is the default. Whatever gets filtered out is still listed underneath,
-collapsed, so you can see what you're skipping. Bye weeks and injured starters
-are never filtered — those are certainties, not edges.
+**Risk setting, based on measured error.** I checked 2025 projections against
+what actually happened: weekly projections miss by about 6.8 points (standard
+deviation) for skill players, so the gap between two players has an SD near 9.6.
+That means a 1-point edge is right only **54%** of the time. 2.5 points gets you
+to 60%, 5 points to 70%.
+
+So a small edge isn't a free win, it's a coin flip. There's a Cautious /
+Balanced / Aggressive toggle setting how big an edge has to be before something
+is recommended, and start/sit moves show the actual odds they're right. The
+floors are higher for waivers and trades than for start/sit, because those moves
+also cost an irreversible drop and finite FAAB or priority — a start/sit is free
+and reversible until kickoff. Filtered moves are still listed underneath,
+collapsed. Byes and injured starters are never filtered; those are certainties,
+not edges.
 
 Mutually exclusive moves collapse into one recommendation with fallbacks — three
 defenses competing for the same bench spot is one move, not three. Every
@@ -73,11 +80,13 @@ league's 43-key scoring dictionary to actual stats reproduces their figure for
 **100% of QB, RB and TE rows and 99.8% of WR** — mean error 0.004. The lineup
 solver is checked against exhaustive search: **300/300 identical**.
 
-That process turned up two real bugs. Sleeper's season endpoint returns
-`fgm: null` for kickers, valuing one at 46 points against a true 111. And their
-*projected* points aren't the sum of their own projected components — QBs came
-out 2.24 low, kickers 1.52 low — so projections now add that difference back,
-which still leaves league-specific scoring intact.
+That process turned up three real bugs. Sleeper's season endpoint returns
+`fgm: null` for kickers, valuing one at 46 points against a true 111. Their
+*projected* points aren't the sum of their own projected components. And when I
+adopted their projection to fix that, measuring against actual results showed it
+**helped kickers but hurt quarterbacks** — their QB number runs about 2.2 points
+hot, pushing QB error from 7.53 RMSE to 8.00. So it's applied to kickers only,
+where it cuts error from 4.84 to 4.70.
 
 ## Limits
 
@@ -88,7 +97,15 @@ Sleeper only. Yahoo sends no CORS headers and its login needs a private key, so
 it would need a server-side proxy.
 
 The hosted version has no server, so it only checks for changes while the page
-is open. The Python version underneath can poll on a schedule.
+is open, and it can't email or push you anything. Two ways around that:
+
+- **Calendar reminders** — the site generates an `.ics` with an alarm before
+  every waiver run and kickoff, timed to your league's settings. Pick which
+  events and how far ahead. No account, no backend.
+- **Scheduled monitoring** — `.github/workflows/monitor.yml` runs the Python
+  engine on a cron schedule, opens a GitHub issue when something needs doing
+  (which emails you), and can push to your phone via ntfy.sh. Change the cron
+  lines to change the frequency.
 
 ## Layout
 
