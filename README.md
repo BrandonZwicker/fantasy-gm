@@ -40,6 +40,25 @@ teams. Offers that would look insulting get filtered out rather than shown.
 lose the chance to act. Lineup changes lock at kickoff, so they outrank trades
 with weeks of runway.
 
+**Injury news, not just the tag.** "Questionable" covers everything from "full
+practice, expected to play" to "ACL surgery", so the tag alone can't decide a
+lineup. ESPN publishes a per-team injury report with a narrative note and allows
+cross-origin reads, so the browser pulls it directly and reads practice
+participation out of it — full practice, limited, DNP, ruled out — to estimate
+the odds a player suits up. ESPN's own designation stays authoritative and the
+narrative only refines the uncertain cases; letting the text override the status
+benched genuinely active players, because the long-form notes recount history.
+
+Numbers you can check against the app are never quietly altered: a healthy
+player shows exactly what Sleeper shows, and anyone in doubt shows both figures
+plus the odds and the source quote.
+
+**When the decision actually expires.** A swap closes at the *earlier* of the
+two players' kickoffs — whoever plays first locks first. "Before Sunday kickoff"
+is useless when one of them plays Thursday night. Each start/sit says when the
+window shuts and when to take a last look, 90 minutes before, when inactives
+are published.
+
 **Risk setting, based on measured error.** I checked 2025 projections against
 what actually happened: weekly projections miss by about 6.8 points (standard
 deviation) for skill players, so the gap between two players has an SD near 9.6.
@@ -69,6 +88,7 @@ Most of these shipped broken first and got caught:
 - Don't say "start this QB over that tight end"
 - Don't suggest shuffling a player between RB and FLEX for zero points
 - Don't push a move whose edge is smaller than the error on the projection
+- Don't invent an injury discount and silently change a number people check
 
 ## Checking the math
 
@@ -112,6 +132,7 @@ is open, and it can't email or push you anything. Two ways around that:
 ```
 docs/     the site that's deployed (plain ES modules, no framework)
 gm/       Python version — same engine, plus scheduled monitoring
+          (uses the injury designation only; live news is browser-side)
 tests/    validation and an end-to-end test on a synthetic league
 ```
 

@@ -9,6 +9,8 @@ import {
 import {
   detectChanges, dropCandidates, findTrades, recommendWaivers, tradeChips,
 } from './advice.js';
+import { fetchInjuryReport } from './injuries.js';
+import { INACTIVES_LEAD_MIN, fetchKickoffs, swapDeadline } from './schedule.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
@@ -81,10 +83,17 @@ export async function buildReport(leagueId, userId, { anonymize = false,
   // the current week drives start/sit. Later weeks refine both, loaded after
   // the first paint so the page isn't blocked on 14 requests.
   onProgress('Scoring every NFL player under your rules…');
-  await Promise.all([
+  const [, , injuries, kickoffs] = await Promise.all([
     state.projections.loadSeason(),
     state.projections.loadWeek(week),
+    // News and schedule are enhancements: if ESPN is unreachable we fall back
+    // to the Sleeper designation rather than failing the whole report.
+    fetchInjuryReport().catch(() => new Map()),
+    fetchKickoffs().catch(() => new Map()),
   ]);
+  state.players.attachInjuries(injuries);
+  state.injuries = injuries;
+  state.kickoffs = kickoffs;
 
   return assemble(state, { onProgress, risk });
 }
@@ -115,13 +124,17 @@ export async function assemble(state, { onProgress = () => {},
   const weeksLeft = Math.max(1, state.weeksRemaining);
 
   const weekMap = state.projections.weeks.get(week) || {};
-  const weekPts = {};
-  for (const pid in weekMap) weekPts[pid] = state.projections.points(pid, week);
+  const weekPts = {};      // risk-adjusted: projection x odds he suits up
+  const weekRaw = {};      // exactly what Sleeper's app shows
+  for (const pid in weekMap) {
+    weekPts[pid] = state.projections.points(pid, week);
+    weekRaw[pid] = state.projections.points(pid, week, false);
+  }
 
   const ros = state.projections.restOfSeason(week, rules.playoffWeekStart - 1);
   for (const pid in ros) {
     const p = state.players.get(pid);
-    if (p && p.availability < 1) ros[pid] = r2(ros[pid] * (0.5 + 0.5 * p.availability));
+    if (p && (p.rosMultiplier ?? 1) < 1) ros[pid] = r2(ros[pid] * p.rosMultiplier);
   }
 
   const levels = replacementLevels(rules, ros, state.players);
@@ -214,16 +227,61 @@ export async function assemble(state, { onProgress = () => {},
         + `starts this is unrecoverable, which is why it outranks waiver and `
         + `trade moves that still have days of runway.` });
 
+      const injuryOf = (id) => {
+        const pl = state.players.get(id);
+        if (!pl || pl.playProb == null || pl.playProb > 0.95) return null;
+        return { name: pl.name, prob: pl.playProb, reason: pl.injuryReason,
+                 note: pl.injuryNote, raw: weekRaw[id] ?? 0 };
+      };
+      const inInj = injuryOf(newPid);
+      const outInj = outPid ? injuryOf(outPid) : null;
+      for (const inj of [inInj, outInj]) {
+        if (!inj) continue;
+        why.push({ h: `${inj.name} is not a lock to play`, t:
+          `Projected ${inj.raw.toFixed(1)} if he suits up, but the latest report `
+          + `puts him around ${Math.round(inj.prob * 100)}% to play `
+          + `(${inj.reason}), so he is worth about `
+          + `${(inj.raw * inj.prob).toFixed(1)} on expectation. `
+          + (inj.note ? `Report: “${inj.note}”` : '')
+          + ` Inactives land about 90 minutes before kickoff — check then.` });
+      }
+
+      // The swap closes at the earlier of the two kickoffs — whoever plays
+      // first locks first, and after that the other can't be moved in.
+      const dl = swapDeadline(state.kickoffs || new Map(),
+                              np?.team, op?.team);
+      if (dl) {
+        const bindingName = dl.bindingTeam === np?.team ? np?.name : op?.name;
+        why.push({ h: dl.locked ? 'This window has closed' : 'When to decide', t:
+          dl.locked
+            ? `${bindingName}'s game has already kicked off, so this swap is no `
+              + `longer possible for week ${week}.`
+            : `Both players have to be movable, so the window closes when the `
+              + `first of them kicks off — ${bindingName} at `
+              + `${dl.locksAt.toLocaleString(undefined, {weekday:'long', hour:'numeric', minute:'2-digit'})}. `
+              + `Inactives are published about ${INACTIVES_LEAD_MIN} minutes before, so `
+              + `${dl.checkBy.toLocaleString(undefined, {weekday:'short', hour:'numeric', minute:'2-digit'})} `
+              + `is your last useful look at the injury report.` });
+      }
+
       actions.push({
         kind: 'start_sit',
         headline: `START ${np?.name ?? newPid} at ${slotName}`
                   + (op ? ` over ${op.name}` : ' (empty slot)') + tail,
         detail: `${inPts.toFixed(1)} proj vs ${outPts.toFixed(1)} — +${gain.toFixed(1)} pts in week ${week}`,
-        payload: { player_id: newPid, slot: slotName, bench: outPid, gain },
+        payload: { player_id: newPid, slot: slotName, bench: outPid, gain,
+                   injury_in: inInj, injury_out: outInj },
         impact: gain, per_week: gain, weight: gain * URGENCY.lineup,
         unit: 'week', confidence: op
           ? edgeConfidence(gain, np?.position, op.position) : null,
-        horizon: `Before week ${week} kickoff`, reasoning: why,
+        deadline: dl ? {
+          locks_at: dl.locksAt.toISOString(),
+          check_by: dl.checkBy.toISOString(),
+          locked: dl.locked,
+          hours_left: Math.round(dl.hoursLeft * 10) / 10,
+        } : null,
+        horizon: dl ? dl.label : `Before week ${week} kickoff`,
+        reasoning: why,
       });
     }
 
@@ -411,8 +469,14 @@ export async function assemble(state, { onProgress = () => {},
   const collect = (pid) => {
     if (!pid || names[pid]) return;
     const p = state.players.get(pid);
-    if (p) names[pid] = { name: p.name, position: p.position, team: p.team,
-                          injury: p.injuryNote };
+    if (p) names[pid] = {
+      name: p.name, position: p.position, team: p.team,
+      injury: p.injury_status || '',
+      play_prob: p.playProb ?? null,
+      injury_reason: p.injuryReason || '',
+      injury_note: p.injuryNote || '',
+      raw: weekRaw[pid] ?? null,
+    };
   };
   currentStarters.forEach(collect);
   lineup?.slots.forEach(s => collect(s.player_id));
