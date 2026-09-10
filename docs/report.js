@@ -202,31 +202,9 @@ export async function assemble(state, { onProgress = () => {},
         tail = ` — ${op.name} is ${op.injury_status}`;
       }
 
-      const why = [{ h: 'The swap', t:
-        `${np?.name ?? newPid} projects ${inPts.toFixed(1)} points in week ${week}`
-        + (op ? ` against ${outPts.toFixed(1)} for ${op.name}` : ' and the slot is currently empty')
-        + ` — a swing of ${gain.toFixed(1)} points, scored under your league's `
-        + `settings rather than generic rankings.` }];
-      if (driver) why.push({ h: 'Why now', t: driver[0].toUpperCase() + driver.slice(1) + '.' });
-      why.push({ h: 'Why this player and not another', t:
-        `Your whole roster is assigned to slots at once rather than picked one `
-        + `at a time, so flex spots get filled optimally. This is the best legal `
-        + `arrangement of the players you have, totalling ${lineup.total.toFixed(1)} `
-        + `projected points.` });
-      if (op) {
-        const conf = edgeConfidence(gain, np?.position, op.position);
-        why.push({ h: 'How sure is this?', t:
-          `Weekly projections miss by about 6.8 points on average, so a `
-          + `${gain.toFixed(1)}-point edge is right roughly `
-          + `${Math.round(conf * 100)}% of the time. Worth making because the `
-          + `move is free and reversible until kickoff — but it is an edge, not `
-          + `a certainty.` });
-      }
-      why.push({ h: 'The clock', t:
-        `Lineup changes are only worth anything before kickoff. Once the game `
-        + `starts this is unrecoverable, which is why it outranks waiver and `
-        + `trade moves that still have days of runway.` });
-
+      // Work out health and timing first: when a player's number has been
+      // adjusted for injury, that is the story, and the deadline to re-check
+      // it becomes the headline rather than a footnote.
       const injuryOf = (id) => {
         const pl = state.players.get(id);
         if (!pl || pl.playProb == null || pl.playProb > 0.95) return null;
@@ -235,33 +213,82 @@ export async function assemble(state, { onProgress = () => {},
       };
       const inInj = injuryOf(newPid);
       const outInj = outPid ? injuryOf(outPid) : null;
-      for (const inj of [inInj, outInj]) {
-        if (!inj) continue;
-        why.push({ h: `${inj.name} is not a lock to play`, t:
-          `Projected ${inj.raw.toFixed(1)} if he suits up, but the latest report `
-          + `puts him around ${Math.round(inj.prob * 100)}% to play `
-          + `(${inj.reason}), so he is worth about `
-          + `${(inj.raw * inj.prob).toFixed(1)} on expectation. `
-          + (inj.note ? `Report: “${inj.note}”` : '')
-          + ` Inactives land about 90 minutes before kickoff — check then.` });
+      const injured = [inInj, outInj].filter(Boolean);
+
+      // A swap closes at the earlier of the two kickoffs — whoever plays first
+      // locks first, and after that the other can't be moved into his slot.
+      const dl = swapDeadline(state.kickoffs || new Map(), np?.team, op?.team);
+      const at = (d) => d.toLocaleString(undefined,
+        { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+      const why = [];
+
+      if (injured.length) {
+        const detail = injured.map(i =>
+          `${i.name} projects ${i.raw.toFixed(1)} if he plays, but the latest `
+          + `report has him about ${Math.round(i.prob * 100)}% to suit up `
+          + `(${i.reason}) — worth roughly ${(i.raw * i.prob).toFixed(1)} once `
+          + `that is priced in`).join('. ');
+
+        if (dl && !dl.locked) {
+          // The single most useful thing here is when to look again.
+          why.push({ h: `Look again ${at(dl.checkBy)}`, t:
+            `This one turns on health rather than form, so the figure here is `
+            + `deliberately below the one in the Sleeper app. ${detail}. `
+            + `Inactives are published about ${INACTIVES_LEAD_MIN} minutes before the `
+            + `${at(dl.locksAt)} kickoff, so ${at(dl.checkBy)} is the last moment `
+            + `the news can still change your mind. If he is active, the gap `
+            + `narrows sharply and this may be worth reversing.` });
+        } else if (dl && dl.locked) {
+          why.push({ h: 'This window has closed', t:
+            `The first of these two has already kicked off, so the swap is no `
+            + `longer possible for week ${week}. ${detail}.` });
+        } else {
+          why.push({ h: 'Hinges on health, not form', t:
+            `${detail}. Inactives are published about ${INACTIVES_LEAD_MIN} minutes `
+            + `before kickoff — check then.` });
+        }
+
+        for (const i of injured) {
+          if (!i.note) continue;
+          why.push({ h: `What's being reported on ${i.name}`, t: `“${i.note}”` });
+        }
       }
 
-      // The swap closes at the earlier of the two kickoffs — whoever plays
-      // first locks first, and after that the other can't be moved in.
-      const dl = swapDeadline(state.kickoffs || new Map(),
-                              np?.team, op?.team);
-      if (dl) {
+      why.push({ h: 'The swap', t:
+        `${np?.name ?? newPid} projects ${inPts.toFixed(1)} points in week ${week}`
+        + (op ? ` against ${outPts.toFixed(1)} for ${op.name}` : ' and the slot is currently empty')
+        + ` — a swing of ${gain.toFixed(1)} points, scored under your league's `
+        + `settings rather than generic rankings.`
+        + (injured.length ? ' Those figures already account for the injury risk above.' : '') });
+
+      if (driver) why.push({ h: 'Why now', t: driver[0].toUpperCase() + driver.slice(1) + '.' });
+
+      if (op && !injured.length) {
+        const conf = edgeConfidence(gain, np?.position, op.position);
+        why.push({ h: 'How sure is this?', t:
+          `Weekly projections miss by about 6.8 points on average, so a `
+          + `${gain.toFixed(1)}-point edge is right roughly `
+          + `${Math.round(conf * 100)}% of the time. Worth making because the `
+          + `move is free and reversible until kickoff — but it is an edge, not `
+          + `a certainty.` });
+      }
+
+      why.push({ h: 'Why this player and not another', t:
+        `Your whole roster is assigned to slots at once rather than picked one `
+        + `at a time, so flex spots get filled optimally. This is the best legal `
+        + `arrangement of the players you have, totalling ${lineup.total.toFixed(1)} `
+        + `projected points.` });
+
+      // For a clean projection edge the deadline is useful but secondary.
+      if (dl && !injured.length) {
         const bindingName = dl.bindingTeam === np?.team ? np?.name : op?.name;
-        why.push({ h: dl.locked ? 'This window has closed' : 'When to decide', t:
+        why.push({ h: dl.locked ? 'This window has closed' : 'When it closes', t:
           dl.locked
             ? `${bindingName}'s game has already kicked off, so this swap is no `
               + `longer possible for week ${week}.`
-            : `Both players have to be movable, so the window closes when the `
-              + `first of them kicks off — ${bindingName} at `
-              + `${dl.locksAt.toLocaleString(undefined, {weekday:'long', hour:'numeric', minute:'2-digit'})}. `
-              + `Inactives are published about ${INACTIVES_LEAD_MIN} minutes before, so `
-              + `${dl.checkBy.toLocaleString(undefined, {weekday:'short', hour:'numeric', minute:'2-digit'})} `
-              + `is your last useful look at the injury report.` });
+            : `Both players have to be movable, so the window shuts when the `
+              + `first of them kicks off — ${bindingName} at ${at(dl.locksAt)}.` });
       }
 
       actions.push({
@@ -271,6 +298,7 @@ export async function assemble(state, { onProgress = () => {},
         detail: `${inPts.toFixed(1)} proj vs ${outPts.toFixed(1)} — +${gain.toFixed(1)} pts in week ${week}`,
         payload: { player_id: newPid, slot: slotName, bench: outPid, gain,
                    injury_in: inInj, injury_out: outInj },
+        injury_driven: injured.length > 0,
         impact: gain, per_week: gain, weight: gain * URGENCY.lineup,
         unit: 'week', confidence: op
           ? edgeConfidence(gain, np?.position, op.position) : null,
@@ -408,10 +436,6 @@ export async function assemble(state, { onProgress = () => {},
             + `which reads as ${t.acceptance} to be accepted.`
             + (t.value_ratio >= 0.55
                ? ' Offers that would look insulting are filtered out entirely.' : '') },
-          { h: 'The clock', t:
-            `The trade deadline is week ${rules.tradeDeadlineWeek}, `
-            + `${Math.max(0, rules.tradeDeadlineWeek - week)} weeks out. There is `
-            + `runway here, which is why trades rank below lineup and waiver moves.` },
         ],
       });
     }

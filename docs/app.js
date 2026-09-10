@@ -152,8 +152,17 @@ function renderGate(msg) {
 function actionHTML(a) {
   const alts = a.payload?.alternatives || [];
   const why = a.reasoning || [];
+  const dl = a.deadline;
+  // An injury-driven swap is a different kind of decision from a projection
+  // edge — it can flip on news — so it says so and points at the re-check.
+  const whyLabel = a.injury_driven
+    ? (dl && !dl.locked
+        ? `Why — and re-check by ${new Date(dl.check_by).toLocaleString(undefined,
+            { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`
+        : 'Why — this one hinges on health')
+    : 'Why this move?';
   const whyHTML = why.length ? `
-    <details><summary>Why this move?</summary>
+    <details class="${a.injury_driven ? 'health' : ''}"><summary>${esc(whyLabel)}</summary>
       <div class="rz">${why.map(s => `<div class="st"><h5>${esc(s.h)}</h5>
         <p>${esc(s.t)}</p></div>`).join('')}</div></details>` : '';
   const altHTML = alts.length ? `
@@ -171,7 +180,6 @@ function actionHTML(a) {
     ? `<span class="pillx">${a.per_week.toFixed(1)} / week</span>` : '';
   const conf = a.confidence != null
     ? `<span class="pillx conf">${Math.round(a.confidence * 100)}% likely right</span>` : '';
-  const dl = a.deadline;
   const check = dl && !dl.locked
     ? `<span class="pillx check">final check ${new Date(dl.check_by)
         .toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>`
@@ -180,6 +188,7 @@ function actionHTML(a) {
     <div class="line">
       <span class="rk ${a.rank <= 2 ? 'top' : ''}">${a.rank}</span>
       <span class="chip t${a.priority}">${esc(a.tier_label || '')}</span>
+      ${a.injury_driven ? '<span class="chip injury">Injury call</span>' : ''}
       <div class="actbody"><h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
     </div>
