@@ -148,8 +148,8 @@ def build_report(league_id: str, user_id: str | None = None, *,
     # Injury-discount the rest-of-season view as well.
     for pid in list(ros):
         p = state.players.get(pid)
-        if p and p.availability < 1.0:
-            ros[pid] = round(ros[pid] * (0.5 + 0.5 * p.availability), 2)
+        if p and p.ros_multiplier < 1.0:
+            ros[pid] = round(ros[pid] * p.ros_multiplier, 2)
 
     levels = replacement_levels(rules, ros, state.players)
     _ = vor(ros, state.players, levels)

@@ -371,8 +371,22 @@ export function vor(projections, players, levels) {
 
 /* ---------------- players, built from projections ---------------- */
 
-const INJURY_RISK = { Out: 1, IR: 1, PUP: 1, Sus: 1, NA: 1, DNR: 1,
-                      Doubtful: 0.75, Questionable: 0.25, Probable: 0.05 };
+/* Injury handling.
+ *
+ * We deliberately do NOT shade projections for players who might still play.
+ * There is no way to calibrate such a multiplier from this data: Sleeper stamps
+ * a player's *current* injury status onto every historical projection row, so
+ * past rows cannot say what a "Questionable" tag was historically worth.
+ *
+ * Inventing a discount also breaks the number users check against the app: a
+ * 25% haircut turned a 12.7-point projection into 9.5 with nothing on screen
+ * explaining it, and that gap was enough to flip start/sit advice.
+ *
+ * The rule is now factual: a player who will not play is worth zero this week,
+ * a player who might play is worth his projection, and the tag is shown.
+ */
+const OUT_THIS_WEEK = new Set(['Out', 'IR', 'PUP', 'Sus', 'NA', 'DNR', 'Doubtful']);
+const LONG_TERM = new Set(['IR', 'PUP', 'NA', 'DNR', 'Sus']);
 
 export class PlayerIndex {
   constructor() { this.byId = new Map(); }
@@ -392,9 +406,32 @@ export class PlayerIndex {
         team: r.team || pl.team || null,
         injury_status: pl.injury_status || null,
         years_exp: pl.years_exp ?? null,
-        availability: 1 - (INJURY_RISK[pl.injury_status] || 0),
+        availability: OUT_THIS_WEEK.has(pl.injury_status) ? 0 : 1,
+        rosMultiplier: LONG_TERM.has(pl.injury_status) ? 0.45 : 1,
+        playsThisWeek: !OUT_THIS_WEEK.has(pl.injury_status),
         injuryNote: pl.injury_status || '',
       });
+    }
+  }
+
+  /** Fold ESPN's injury report onto the index, by player name. */
+  attachInjuries(report) {
+    this.injuries = report;
+    for (const p of this.byId.values()) {
+      const hit = report && report.get
+        ? report.get(String(p.name || '').toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g, '')
+            .replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim())
+        : null;
+      if (hit) {
+        p.playProb = hit.probability;
+        p.injuryReason = hit.reason;
+        p.injuryNote = hit.shortNote || hit.note || '';
+        p.injuryStatusNews = hit.status;
+        // News supersedes the Sleeper tag, which is coarser and often stale.
+        p.availability = hit.probability;
+      }
     }
   }
 
@@ -406,7 +443,7 @@ export class PlayerIndex {
     if (pid.length <= 3 && /^[A-Za-z]+$/.test(pid)) {
       p = { player_id: pid, name: `${pid.toUpperCase()} Defense`, position: 'DEF',
             team: pid.toUpperCase(), injury_status: null, availability: 1,
-            injuryNote: '', years_exp: null };
+            rosMultiplier: 1, playsThisWeek: true, injuryNote: '', years_exp: null };
       this.byId.set(pid, p);
       return p;
     }

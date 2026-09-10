@@ -5,11 +5,27 @@ from dataclasses import dataclass
 
 from .sleeper import Sleeper
 
-# Injury designations, worst to best. Used to discount projections.
-INJURY_RISK = {
-    "Out": 1.0, "IR": 1.0, "PUP": 1.0, "Sus": 1.0, "NA": 1.0, "DNR": 1.0,
-    "Doubtful": 0.75, "Questionable": 0.25, "Probable": 0.05,
-}
+# Injury handling.
+#
+# We deliberately do NOT shade projections for players who might still play.
+# There is no way to calibrate such a multiplier from this data: Sleeper stamps
+# a player's *current* injury status onto every historical projection row (663
+# of 664 tagged players carry an identical tag across weeks 1, 5, 9 and 13), so
+# past rows cannot tell us what a "Questionable" tag was historically worth.
+#
+# Inventing a discount also breaks the thing users check against: a 25% haircut
+# turned a 12.7-point projection into 9.5 with nothing on screen explaining the
+# gap, and the difference was large enough to flip start/sit advice.
+#
+# So the rule is now factual rather than estimated: a player who will not play
+# is worth zero this week, a player who might play is worth his projection, and
+# the designation is shown so the decision stays with the user.
+
+# Designations meaning the player will not suit up this week.
+OUT_THIS_WEEK = {"Out", "IR", "PUP", "Sus", "NA", "DNR", "Doubtful"}
+
+# Designations that also depress value beyond this week.
+LONG_TERM = {"IR", "PUP", "NA", "DNR", "Sus"}
 
 
 @dataclass
@@ -30,9 +46,20 @@ class Player:
         return (self.status or "").lower() in {"active", ""} or self.status is None
 
     @property
+    def plays_this_week(self) -> bool:
+        """False only when the designation means he is not suiting up."""
+        return (self.injury_status or "") not in OUT_THIS_WEEK
+
+    @property
     def availability(self) -> float:
-        """0..1 multiplier on projection for injury designation."""
-        return 1.0 - INJURY_RISK.get(self.injury_status or "", 0.0)
+        """Weekly multiplier: 1 if he might play, 0 if he definitely won't."""
+        return 1.0 if self.plays_this_week else 0.0
+
+    @property
+    def ros_multiplier(self) -> float:
+        """Rest-of-season multiplier. Only long-term designations reduce it;
+        a week-to-week tag says nothing about November."""
+        return 0.45 if (self.injury_status or "") in LONG_TERM else 1.0
 
     @property
     def injury_note(self) -> str:
