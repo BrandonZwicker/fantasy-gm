@@ -250,10 +250,6 @@ def build_report(league_id: str, user_id: str | None = None, *,
                 f"picked one at a time, so flex spots get filled optimally. "
                 f"This is the best legal arrangement of the players you have, "
                 f"totalling {lineup.total:.1f} projected points."})
-            why.append({"h": "The clock", "t":
-                "Lineup changes are only worth anything before kickoff. Once "
-                "the game starts this is unrecoverable, which is why it "
-                "outranks waiver and trade moves that still have days of runway."})
 
             actions.append(Action(
                 kind="start_sit", priority=1,
@@ -376,11 +372,6 @@ def build_report(league_id: str, user_id: str | None = None, *,
                      + ("Offers that would look insulting are filtered out "
                         "entirely rather than shown to you."
                         if tr.value_ratio >= 0.55 else "")},
-                    {"h": "The clock", "t":
-                     f"The trade deadline is week {rules.trade_deadline_week}, "
-                     f"{max(0, rules.trade_deadline_week - week)} weeks out. "
-                     f"There is runway here, which is why trades rank below "
-                     f"lineup and waiver moves that expire sooner."},
                 ]
                 actions.append(Action(
                     kind="trade",

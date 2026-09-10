@@ -55,9 +55,14 @@ plus the odds and the source quote.
 
 **When the decision actually expires.** A swap closes at the *earlier* of the
 two players' kickoffs — whoever plays first locks first. "Before Sunday kickoff"
-is useless when one of them plays Thursday night. Each start/sit says when the
-window shuts and when to take a last look, 90 minutes before, when inactives
-are published.
+is useless when one of them plays Thursday night.
+
+A move driven by an injury is a different kind of decision from a projection
+edge, because it can flip on news, so it is presented differently: it is tagged
+**Injury call**, and its explanation opens with when to look again rather than
+burying that at the end — "Look again Sun 11:30 AM", 90 minutes before the
+binding kickoff, when inactives are published. A clean projection edge just
+explains the edge and the odds.
 
 **Risk setting, based on measured error.** I checked 2025 projections against
 what actually happened: weekly projections miss by about 6.8 points (standard
