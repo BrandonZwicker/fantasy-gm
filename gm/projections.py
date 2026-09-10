@@ -46,7 +46,8 @@ class ProjectionBook:
                 continue
             out[pid] = WeekProjection(
                 player_id=pid,
-                points=self.rules.score_projection(e.get("stats")),
+                points=self.rules.score_projection(
+                    e.get("stats"), (e.get("player") or {}).get("position")),
                 team=e.get("team"),
                 opponent=e.get("opponent"),
                 week=week,
@@ -83,7 +84,8 @@ class ProjectionBook:
         for e in raw or []:
             pid = str(e.get("player_id") or "")
             if pid:
-                out[pid] = self.rules.score_projection(e.get("stats"))
+                out[pid] = self.rules.score_projection(
+                    e.get("stats"), (e.get("player") or {}).get("position"))
         self._season_totals = out
         return out
 
