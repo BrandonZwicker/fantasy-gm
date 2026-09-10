@@ -21,47 +21,38 @@ const URGENCY = { lineup: 3.2, waiver: 1.6, trade: 0.9, info: 0.35 };
 
 /* How big an edge has to be before a move is worth making.
  *
- * Grounded in measured error, not taste. Comparing 2025 projections against
- * what actually happened, weekly projections carry a standard deviation of
- * roughly 6.8 points for skill players — so the gap between two players has an
- * SD near 9.6. A 1-point edge is therefore right only 54% of the time; 2.5
- * points gets you to 60%, and 5 points to 70%.
+ * One fixed setting rather than a dial. Grounded in measured error: comparing
+ * 2025 projections against results, weekly projections carry a standard
+ * deviation near 6.8 points for skill players, so the gap between two players
+ * has an SD near 9.6. A 1-point edge is right only 54% of the time; 2.5 points
+ * gets to 60%. Below these floors a move is a coin flip dressed up as advice.
  *
- * The floors also reflect what a move costs, which differs by kind:
- *   - a start/sit is free and reversible until kickoff, so it only has to beat
- *     the noise
- *   - a waiver claim costs an irreversible drop plus finite FAAB or priority,
- *     so it has to clear a good deal more than break-even
- *   - a trade permanently swaps an asset
- *
- * Warnings (a bye, an injured starter) are never filtered: those are
- * certainties, not projected edges.
+ * Waiver and trade floors sit higher because those moves cost more than a
+ * lineup tweak: an irreversible drop, finite FAAB or priority, a traded asset.
+ * Warnings (a bye, an injured starter) are never filtered — certainties, not
+ * edges.
  */
-export const RISK_PROFILES = {
-  cautious: {
-    label: 'Cautious',
-    blurb: 'Only moves that are ~70% likely to be right.',
-    startSit: 5.0,       // points this week — about 70% confidence
-    waiverPerWeek: 3.0,  // points per remaining week
-    tradeGain: 15.0,     // points rest-of-season
-  },
-  balanced: {
-    label: 'Balanced',
-    blurb: 'Skips anything inside the projection noise.',
-    startSit: 2.5,       // about 60% confidence
-    waiverPerWeek: 1.5,
-    tradeGain: 8.0,
-  },
-  aggressive: {
-    label: 'Aggressive',
-    blurb: 'Takes any edge, even a coin flip.',
-    startSit: 1.0,       // about 54% confidence
-    waiverPerWeek: 0.5,
-    tradeGain: 3.0,
-  },
+export const THRESHOLDS = {
+  startSit: 2.5,       // points this week — about 60% confidence
+  waiverPerWeek: 1.5,  // points per remaining week
+  tradeGain: 8.0,      // points rest-of-season
 };
-export const DEFAULT_RISK = 'balanced';
-const profileFor = (r) => RISK_PROFILES[r] || RISK_PROFILES[DEFAULT_RISK];
+
+/* Plays that are worth real money but are not safe calls: a trade the other
+ * manager will probably refuse, or a free agent who does nothing this week but
+ * could matter later. Kept out of the main list so that list stays unanimous,
+ * and surfaced separately so they are not simply lost.
+ */
+const SPECULATIVE_TRADE_GAIN = 12.0;
+const SPECULATIVE_STASH_GAIN = 8.0;
+
+/** Which deadline governs this move — the basis for how the list is grouped. */
+function bucketOf(kind) {
+  if (kind === 'waiver') return 'waivers';
+  if (kind === 'trade') return 'trades';
+  return 'lineup';       // start_sit and alerts both lock at kickoff
+}
+
 const TIERS = [[6, 1, 'Do now'], [2, 2, 'This week'],
                [0.6, 3, 'Worth doing'], [0, 4, 'Optional']];
 const tierOf = (w) => {
@@ -71,7 +62,6 @@ const tierOf = (w) => {
 
 export async function buildReport(leagueId, userId, { anonymize = false,
                                                       source = null,
-                                                      risk = DEFAULT_RISK,
                                                       onProgress = () => {} } = {}) {
   onProgress('Reading league settings…');
   const state = await LeagueState.load(leagueId, userId, { anonymize, source });
@@ -95,7 +85,7 @@ export async function buildReport(leagueId, userId, { anonymize = false,
   state.injuries = injuries;
   state.kickoffs = kickoffs;
 
-  return assemble(state, { onProgress, risk });
+  return assemble(state, { onProgress });
 }
 
 /** Load remaining weeks so byes and rest-of-season sharpen. */
@@ -115,9 +105,8 @@ export async function refine(state, onProgress = () => {}) {
 const rulesLastWeek = (state) => Math.max(state.currentWeek,
                                           state.rules.playoffWeekStart - 1);
 
-export async function assemble(state, { onProgress = () => {},
-                                        risk = DEFAULT_RISK } = {}) {
-  const floor = profileFor(risk);
+export async function assemble(state, { onProgress = () => {} } = {}) {
+  const floor = THRESHOLDS;
   const rules = state.rules;
   const week = state.currentWeek;
   const me = state.me;
@@ -291,6 +280,9 @@ export async function assemble(state, { onProgress = () => {},
               + `first of them kicks off — ${bindingName} at ${at(dl.locksAt)}.` });
       }
 
+      // A swap whose window has already shut is not advice, it is a regret.
+      if (dl && dl.locked) continue;
+
       actions.push({
         kind: 'start_sit',
         headline: `START ${np?.name ?? newPid} at ${slotName}`
@@ -366,7 +358,7 @@ export async function assemble(state, { onProgress = () => {},
         detail: w.rationale,
         payload: {
           player_id: w.player_id, bid: w.faab_bid, drop_id: w.drop_id,
-          net_gain: w.net_gain,
+          net_gain: w.net_gain, marginal_week: w.marginal_week,
           alternatives: w.alternatives.map(a => ({
             label: `${a.name} (${a.position}-${a.team})`, bid: a.faab_bid,
             net_gain: a.net_gain, drop_name: a.drop_name, detail: a.rationale,
@@ -380,7 +372,9 @@ export async function assemble(state, { onProgress = () => {},
 
     /* ---- trades ---- */
     onProgress('Searching every roster for trades…');
-    trades = findTrades(state, ros, levels, { limit: 6, minMyGain: floor.tradeGain });
+    // Search below the display floor so long-shot ideas can still surface
+    // in the speculative list rather than never being built.
+    trades = findTrades(state, ros, levels, { limit: 8, minMyGain: floor.tradeGain });
     if (!trades.length) {
       const chips = tradeChips(state, ros, levels, 2)
         .map(([pid]) => state.players.name(pid));
@@ -407,7 +401,7 @@ export async function assemble(state, { onProgress = () => {},
         detail: t.rationale,
         payload: {
           partner: t.partner_roster_id, send: t.send, receive: t.receive,
-          my_gain: t.my_gain, their_gain: t.their_gain,
+          my_gain: t.my_gain, their_gain: t.their_gain, acceptance: t.acceptance,
           alternatives: t.alternatives.map(a => ({
             label: `${a.partner_name}: ${a.summary}`, net_gain: a.my_gain,
             detail: `${a.acceptance} to be accepted · them +${a.their_gain.toFixed(1)}`,
@@ -468,10 +462,28 @@ export async function assemble(state, { onProgress = () => {},
     if (a.kind === 'trade') return a.impact < floor.tradeGain;
     return false;
   };
+  // High upside, low certainty. Worth seeing, but not alongside the calls that
+  // are simply correct.
+  const isSpeculative = (a) => {
+    if (a.kind === 'trade') {
+      return a.payload?.acceptance === 'long shot' && a.impact >= SPECULATIVE_TRADE_GAIN;
+    }
+    if (a.kind === 'waiver') {
+      // Does nothing for you this week, but could pay off across the season.
+      return (a.payload?.marginal_week ?? 1) < 0.5 && a.impact >= SPECULATIVE_STASH_GAIN;
+    }
+    return false;
+  };
+
   const held = actions.filter(belowFloor);
-  const kept = actions.filter(a => !belowFloor(a));
+  const rest = actions.filter(a => !belowFloor(a));
+  const speculative = rest.filter(isSpeculative);
+  const kept = rest.filter(a => !isSpeculative(a));
   actions.length = 0;
   actions.push(...kept);
+
+  speculative.sort((a, b) => b.impact - a.impact);
+  speculative.forEach(a => { a.bucket = bucketOf(a.kind); });
 
   // One scale: points at stake, weighted by how soon the chance to act goes.
   actions.sort((a, b) => b.weight - a.weight);
@@ -480,6 +492,7 @@ export async function assemble(state, { onProgress = () => {},
     const t = tierOf(a.weight);
     a.priority = t.priority;
     a.tier_label = t.label;
+    a.bucket = bucketOf(a.kind);
   });
 
   const deadlines = [
@@ -518,9 +531,16 @@ export async function assemble(state, { onProgress = () => {},
     lineup, current_starters: currentStarters, lineup_gain: lineupGain,
     actions, waivers, drops, trades, changes, trade_note: tradeNote,
     faab_left: faabLeft, next_waiver: nextWaiver, deadlines,
-    risk, risk_profile: floor,
+    thresholds: floor,
+    speculative,
     waiver_day_of_week: rules.waiverDayOfWeek,
     held_back: held.length,
+    // Deadline wording for each group, built from this league's own settings.
+    buckets: {
+      lineup: `Before kickoff`,
+      waivers: `Before waivers run — ${nextWaiver}`,
+      trades: `No deadline — trade deadline is week ${rules.tradeDeadlineWeek}`,
+    },
     held_back_detail: held
       .sort((a, b) => b.impact - a.impact)
       .slice(0, 6)

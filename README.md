@@ -64,20 +64,27 @@ burying that at the end — "Look again Sun 11:30 AM", 90 minutes before the
 binding kickoff, when inactives are published. A clean projection edge just
 explains the edge and the odds.
 
-**Risk setting, based on measured error.** I checked 2025 projections against
-what actually happened: weekly projections miss by about 6.8 points (standard
-deviation) for skill players, so the gap between two players has an SD near 9.6.
-That means a 1-point edge is right only **54%** of the time. 2.5 points gets you
-to 60%, 5 points to 70%.
+**One threshold, not a dial.** I checked 2025 projections against what actually
+happened: weekly projections miss by about 6.8 points (standard deviation) for
+skill players, so the gap between two players has an SD near 9.6. A 1-point edge
+is right only **54%** of the time; 2.5 points gets to 60%, 5 points to 70%.
 
-So a small edge isn't a free win, it's a coin flip. There's a Cautious /
-Balanced / Aggressive toggle setting how big an edge has to be before something
-is recommended, and start/sit moves show the actual odds they're right. The
-floors are higher for waivers and trades than for start/sit, because those moves
-also cost an irreversible drop and finite FAAB or priority — a start/sit is free
-and reversible until kickoff. Filtered moves are still listed underneath,
-collapsed. Byes and injured starters are never filtered; those are certainties,
-not edges.
+So there's a fixed floor a move has to clear, and start/sit moves show the odds
+they're right. The floor is higher for waivers and trades than for start/sit,
+because those cost an irreversible drop and finite FAAB or priority — a start/sit
+is free and reversible until kickoff. Anything below the floor is listed
+underneath, collapsed. There's no risk slider: the recommendations should just be
+correct.
+
+**High risk, high reward** is a separate section, for plays that are worth real
+points but probably won't come off — a trade the other manager will likely refuse,
+or a free agent who does nothing this week but could matter later. Kept out of the
+main list so that list stays unanimous, and kept visible so they aren't lost.
+
+**Grouped by deadline, not by an abstract tier.** Moves are numbered by what's at
+stake and grouped under the thing that actually constrains them — "Before
+kickoff", "Before waivers run", "No deadline". A swap whose window has already
+shut isn't shown at all.
 
 Mutually exclusive moves collapse into one recommendation with fallbacks — three
 defenses competing for the same bench spot is one move, not three. Every
