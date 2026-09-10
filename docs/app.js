@@ -27,8 +27,11 @@ const pinfo = (id) => REPORT?.player_names?.[id] || { name: id, position: '', te
 function who(id) {
   if (!id) return '<span class="vacant">— empty —</span>';
   const p = pinfo(id);
+  const odds = (p.play_prob != null && p.play_prob < 0.95)
+    ? `<span class="odds" title="${esc(p.injury_note || p.injury_reason || '')}">${Math.round(p.play_prob * 100)}% to play</span>`
+    : '';
   return `<b>${esc(p.name)}</b><span>${esc(p.position)}${p.team ? ' · ' + esc(p.team) : ''}</span>`
-       + (p.injury ? `<span class="hurt">${esc(p.injury)}</span>` : '');
+       + (p.injury ? `<span class="hurt">${esc(p.injury)}</span>` : '') + odds;
 }
 const plain = (id) => esc(pinfo(id).name);
 
@@ -168,6 +171,11 @@ function actionHTML(a) {
     ? `<span class="pillx">${a.per_week.toFixed(1)} / week</span>` : '';
   const conf = a.confidence != null
     ? `<span class="pillx conf">${Math.round(a.confidence * 100)}% likely right</span>` : '';
+  const dl = a.deadline;
+  const check = dl && !dl.locked
+    ? `<span class="pillx check">final check ${new Date(dl.check_by)
+        .toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>`
+    : dl && dl.locked ? '<span class="pillx locked">window closed</span>' : '';
   return `<div class="act">
     <div class="line">
       <span class="rk ${a.rank <= 2 ? 'top' : ''}">${a.rank}</span>
@@ -175,7 +183,7 @@ function actionHTML(a) {
       <div class="actbody"><h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
     </div>
-    <div class="meta-row">${pts}${rate}${conf}
+    <div class="meta-row">${pts}${rate}${conf}${check}
       ${a.horizon ? `<span class="pillx when">${esc(a.horizon)}</span>` : ''}</div>
     ${(whyHTML || altHTML) ? `<div class="disc">${whyHTML}${altHTML}</div>` : ''}
   </div>`;
@@ -224,13 +232,19 @@ const CARDS = {
   },
 
   lineup(r) {
+    const shown = (id, adjusted) => {
+      const p = pinfo(id);
+      if (p.raw == null || Math.abs(p.raw - adjusted) < 0.05) return adjusted.toFixed(1);
+      // Never quietly show a different number than the app: give both.
+      return `${p.raw.toFixed(1)}<span class="adj">${adjusted.toFixed(1)} exp.</span>`;
+    };
     const rows = (r.lineup?.slots || []).map(s => `
       <tr><td><span class="slot">${esc(s.slot)}</span></td>
         <td class="who">${who(s.player_id)}</td>
-        <td class="n">${s.points.toFixed(1)}</td></tr>`).join('');
+        <td class="n">${s.player_id ? shown(s.player_id, s.points) : s.points.toFixed(1)}</td></tr>`).join('');
     const bench = (r.lineup?.bench || []).slice(0, 10).map(([id, p]) => `
       <tr class="bench"><td><span class="slot bn">BN</span></td>
-        <td class="who">${who(id)}</td><td class="n dim">${p.toFixed(1)}</td></tr>`).join('');
+        <td class="who">${who(id)}</td><td class="n dim">${shown(id, p)}</td></tr>`).join('');
     return `<div class="card"><header><h3>Week ${r.week} lineup</h3>
       <span class="note">${r.lineup ? r.lineup.total.toFixed(1) : '—'} projected</span></header>
       <div class="in"><table>
