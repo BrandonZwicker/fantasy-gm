@@ -1,7 +1,7 @@
 /* Fantasy GM — UI. Everything runs client-side; there is no server. */
 
 import { Sleeper } from './engine.js';
-import { DEFAULT_RISK, RISK_PROFILES, assemble, buildReport, refine } from './report.js';
+import { assemble, buildReport, refine } from './report.js';
 import { EXAMPLE, PLATFORMS } from './providers.js';
 import { EVENT_KINDS, LEAD_TIMES, downloadICS } from './reminders.js';
 
@@ -12,7 +12,7 @@ const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); 
 const drop = (k) => { try { localStorage.removeItem(k); } catch {} };
 
 let SESSION = readJSON(KEY);
-let PREFS = { mode: 'tabs', tab: 'overview', risk: DEFAULT_RISK,
+let PREFS = { mode: 'tabs', tab: 'overview',
               remind: ['waivers', 'kickoff'], lead: '3h',
               ...(readJSON(PREF) || {}) };
 let REPORT = null;
@@ -187,7 +187,6 @@ function actionHTML(a) {
   return `<div class="act">
     <div class="line">
       <span class="rk ${a.rank <= 2 ? 'top' : ''}">${a.rank}</span>
-      <span class="chip t${a.priority}">${esc(a.tier_label || '')}</span>
       ${a.injury_driven ? '<span class="chip injury">Injury call</span>' : ''}
       <div class="actbody"><h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
@@ -224,19 +223,27 @@ const CARDS = {
   },
 
   actions(r) {
+    const ORDER = ['lineup', 'waivers', 'trades'];
+    const grouped = ORDER
+      .map(k => [k, r.actions.filter(a => (a.bucket || 'lineup') === k)])
+      .filter(([, list]) => list.length);
+    const groupsHTML = grouped.map(([k, list]) => `
+      <div class="grp"><div class="grp-h">${esc(r.buckets?.[k] || k)}</div>
+        ${list.map(actionHTML).join('')}</div>`).join('');
+
     const held = r.held_back
-      ? `<details class="heldback"><summary>${r.held_back} smaller move${r.held_back > 1 ? 's' : ''} not worth making at ${(r.risk_profile?.label || '').toLowerCase()} risk</summary>
+      ? `<details class="heldback"><summary>${r.held_back} move${r.held_back > 1 ? 's' : ''} too small to be worth making</summary>
            <div class="rz">${(r.held_back_detail || []).map(h => `<div class="st">
              <h5>${esc(h.headline)}</h5><p>worth ${(+h.impact).toFixed(1)} pts</p></div>`).join('')}
-           <div class="st"><p>Projections carry a few points of error, so edges
-             this small are as likely to cost you as gain you. Raise the risk
-             setting above to act on them anyway.</p></div></div></details>`
+           <div class="st"><p>Weekly projections miss by about 6.8 points, so an
+             edge this small is close to a coin flip — as likely to cost you as
+             to gain you.</p></div></div></details>`
       : '';
-    const body = r.actions.length ? r.actions.map(actionHTML).join('') + held
+    const body = r.actions.length ? groupsHTML + held
       : `<div class="allclear"><span class="big">All clear</span>
          No moves worth making right now. Check back after the next games.</div>${held}`;
     return `<div class="card"><header><h3>What to do</h3>
-      <span class="note">${r.actions.length} item${r.actions.length === 1 ? '' : 's'} · ranked by points at stake and how soon you lose the chance</span></header>
+      <span class="note">${r.actions.length} item${r.actions.length === 1 ? '' : 's'} · numbered by how much is at stake, grouped by when you lose the chance</span></header>
       <div class="in">${body}</div></div>`;
   },
 
@@ -311,6 +318,28 @@ const CARDS = {
       <div class="in">${body}</div></div>`;
   },
 
+  speculative(r) {
+    const list = r.speculative || [];
+    if (!list.length) return '';
+    return `<div class="card spec"><header><h3>High risk, high reward</h3>
+      <span class="note">worth real points, but unlikely to come off</span></header>
+      <div class="in">
+        <p class="spec-lede">These are kept out of the list above so that list
+          stays unanimous. Each one is worth chasing if you want the upside —
+          just don't count on it.</p>
+        ${list.map(a => `<div class="act spec-act">
+          <div class="line"><span class="rk">↑</span>
+            <div class="actbody"><h4>${esc(a.headline)}</h4>
+              ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div></div>
+          <div class="meta-row">
+            <span class="pillx pts">+${a.impact.toFixed(1)} pts rest of season</span>
+            <span class="pillx spec-why">${esc(
+              a.kind === 'trade' ? 'they will probably say no'
+                                 : 'does nothing for you this week')}</span>
+          </div></div>`).join('')}
+      </div></div>`;
+  },
+
   reminders(r) {
     const link = r.league_id && r.league_id !== 'EXAMPLE'
       ? `<a class="sleeperlink" href="https://sleeper.com/leagues/${esc(r.league_id)}" target="_blank" rel="noopener">Open this league on Sleeper →</a>`
@@ -362,7 +391,7 @@ function tabBody(r, tab) {
   switch (tab) {
     case 'lineup':   return CARDS.lineup(r) + CARDS.drops(r);
     case 'waivers':  return CARDS.waivers(r) + CARDS.drops(r);
-    case 'trades':   return CARDS.trades(r);
+    case 'trades':   return CARDS.trades(r) + CARDS.speculative(r);
     case 'activity': return CARDS.activity(r);
     case 'league':   return CARDS.rules(r) + CARDS.reminders(r);
     default:         return CARDS.hero(r) + CARDS.actions(r);
@@ -382,13 +411,6 @@ function render(r, { isExample }) {
       <div class="crumb">Week ${r.week} · <b>${esc(r.my_team)}</b> · ${esc(r.record)}</div>
       <div class="grow"></div>
       <div class="viewsel">
-        <span class="viewlbl">Risk</span>
-        <div class="seg" id="riskseg">
-          ${Object.entries(RISK_PROFILES).map(([k, v]) =>
-            `<button data-risk="${k}" title="${esc(v.blurb)}" class="${PREFS.risk === k ? 'on' : ''}">${esc(v.label)}</button>`).join('')}
-        </div>
-      </div>
-      <div class="viewsel">
         <span class="viewlbl">Page view</span>
         <div class="seg" id="seg">
           <button data-mode="tabs" class="${mode === 'tabs' ? 'on' : ''}">Sections</button>
@@ -407,7 +429,7 @@ function render(r, { isExample }) {
   const body = mode === 'all'
     ? `<main>${CARDS.hero(r)}
         <div class="cols">
-          <div>${CARDS.actions(r)}${CARDS.lineup(r)}${CARDS.trades(r)}</div>
+          <div>${CARDS.actions(r)}${CARDS.lineup(r)}${CARDS.trades(r)}${CARDS.speculative(r)}</div>
           <div>${CARDS.waivers(r)}${CARDS.drops(r)}${CARDS.activity(r)}${CARDS.rules(r)}${CARDS.reminders(r)}</div>
         </div></main>`
     : `<main class="focused">${tabBody(r, tab)}</main>`;
@@ -426,13 +448,6 @@ function render(r, { isExample }) {
     const m = e.target.dataset.mode;
     if (!m || m === PREFS.mode) return;
     PREFS.mode = m; savePrefs(); render(r, { isExample });
-  };
-  document.getElementById('riskseg').onclick = (e) => {
-    const v = e.target.dataset.risk;
-    if (!v || v === PREFS.risk) return;
-    PREFS.risk = v; savePrefs();
-    // Recompute from the loaded state; no refetch needed.
-    if (STATE) assemble(STATE, { risk: v }).then(rep => render(rep, { isExample }));
   };
   // Reminder controls (present on the League tab and in one-page mode).
   const leadSeg = document.getElementById('leadseg');
@@ -487,7 +502,7 @@ async function run(force) {
 
   loading(isExample ? 'the example league' : SESSION.league_name);
   try {
-    let opts = { onProgress: setProg, risk: PREFS.risk }, leagueId, userId;
+    let opts = { onProgress: setProg }, leagueId, userId;
     if (isExample) {
       const ex = await EXAMPLE.load();
       opts.source = ex.source;
@@ -504,7 +519,7 @@ async function run(force) {
     // rest in the background so byes and rest-of-season sharpen, then
     // quietly re-render.
     refine(r._state).then(async () => {
-      const better = await assemble(r._state, { risk: PREFS.risk });
+      const better = await assemble(r._state);
       render(better, { isExample });
       hint('Updated with the full remaining schedule');
     }).catch(() => {});

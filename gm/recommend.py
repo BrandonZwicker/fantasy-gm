@@ -34,20 +34,12 @@ URGENCY = {
 # carry several points of error, so a move gaining 0.8 projected points sits
 # inside the noise -- as likely to cost you as to gain. Warnings (a bye, an
 # injured starter) are never filtered: those are certainties, not edges.
-RISK_PROFILES = {
-    # Thresholds measured, not guessed: against 2025 results, weekly projections
-    # carry an SD near 6.8 points for skill players, so the gap between two
-    # players has an SD near 9.6. A 1-point edge is right 54% of the time, 2.5
-    # points 60%, 5 points 70%. Waiver and trade floors sit higher because those
-    # moves also cost an irreversible drop and finite FAAB or priority.
-    "cautious":   {"label": "Cautious",   "start_sit": 5.0,
-                   "waiver_per_week": 3.0, "trade_gain": 15.0},
-    "balanced":   {"label": "Balanced",   "start_sit": 2.5,
-                   "waiver_per_week": 1.5, "trade_gain": 8.0},
-    "aggressive": {"label": "Aggressive", "start_sit": 1.0,
-                   "waiver_per_week": 0.5, "trade_gain": 3.0},
-}
-DEFAULT_RISK = "balanced"
+# One fixed setting rather than a dial. Grounded in measured error: weekly
+# projections carry an SD near 6.8 points for skill players, so the gap between
+# two players has an SD near 9.6. A 1-point edge is right only 54% of the time;
+# 2.5 points gets to 60%. Waiver and trade floors sit higher because those moves
+# also cost an irreversible drop and finite FAAB or priority.
+THRESHOLDS = {"start_sit": 2.5, "waiver_per_week": 1.5, "trade_gain": 8.0}
 
 TIERS = [
     (6.0, 1, "Do now"),
@@ -102,7 +94,6 @@ class Report:
     next_waiver: str
     deadlines: list[str]
     trade_note: str = ""
-    risk: str = DEFAULT_RISK
     held_back: int = 0
     waiver_type: str = "none"      # faab | rolling | reverse | none
     uses_faab: bool = False
@@ -131,7 +122,7 @@ def _next_waiver_run(rules) -> str:
 
 def build_report(league_id: str, user_id: str | None = None, *,
                  force: bool = False, do_trades: bool = True,
-                 risk: str = DEFAULT_RISK, con=None) -> Report:
+                 con=None) -> Report:
     s = Sleeper()
     state = LeagueState(s, league_id, user_id=user_id, force=force)
     rules = state.rules
@@ -160,7 +151,7 @@ def build_report(league_id: str, user_id: str | None = None, *,
                                 {"critical": 0, "high": 1, "medium": 2}.get(c.severity, 3)))
 
     actions: list[Action] = []
-    floor = RISK_PROFILES.get(risk, RISK_PROFILES[DEFAULT_RISK])
+    floor = THRESHOLDS
     next_waiver_txt = _next_waiver_run(rules)
     lineup = None
     lineup_gain = 0.0
@@ -457,7 +448,7 @@ def build_report(league_id: str, user_id: str | None = None, *,
         lineup=lineup, current_starters=current_starters,
         lineup_gain=lineup_gain, actions=actions, waivers=waivers,
         drops=drops, trades=trades, changes=changes, trade_note=trade_note,
-        risk=risk, held_back=held_back,
+        held_back=held_back,
         faab_left=faab_left, next_waiver=next_waiver_txt,
         deadlines=deadlines,
         waiver_type=rules.waiver_type, uses_faab=rules.uses_faab,
