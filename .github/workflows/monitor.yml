@@ -1,0 +1,68 @@
+# Scheduled league monitoring.
+#
+# The hosted site has no server, so it only looks at your league while the page
+# is open. This does the polling instead: it runs on a schedule, builds a
+# digest, and opens a GitHub issue when something needs doing — which GitHub
+# emails you about. Optionally pushes to your phone via ntfy.sh.
+#
+# TO SET UP
+#   1. Settings > Secrets and variables > Actions > Variables, add:
+#        SLEEPER_USERNAME   your Sleeper handle
+#        SLEEPER_LEAGUE_ID  from the league URL
+#      Optional variables:
+#        RISK               cautious | balanced | aggressive   (default balanced)
+#        NTFY_TOPIC         a topic name to push to your phone via ntfy.sh
+#   2. Adjust the cron lines below to change how often it checks.
+
+name: League monitor
+
+on:
+  schedule:
+    # Times are UTC. Default: Wednesday 23:00 UTC (before Thursday waivers)
+    # and Sunday 15:00 UTC (before the early kickoffs).
+    - cron: '0 23 * * 3'
+    - cron: '0 15 * * 0'
+  workflow_dispatch:        # lets you run it on demand from the Actions tab
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: pip install -q -r requirements.txt
+
+      - name: Build digest
+        id: digest
+        env:
+          SLEEPER_USERNAME: ${{ vars.SLEEPER_USERNAME }}
+          SLEEPER_LEAGUE_ID: ${{ vars.SLEEPER_LEAGUE_ID }}
+        run: |
+          set +e
+          python cli.py digest --risk "${{ vars.RISK || 'balanced' }}" --out digest.md
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat digest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue when something needs doing
+        if: steps.digest.outputs.code == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Roster moves — $(date -u '+%b %d')" \
+            --body-file digest.md \
+            --repo "${{ github.repository }}"
+
+      - name: Push to phone (optional)
+        if: steps.digest.outputs.code == '0' && vars.NTFY_TOPIC != ''
+        run: |
+          curl -sf -H "Title: Fantasy GM" -H "Priority: default" \
+            -d "$(head -c 900 digest.md)" \
+            "https://ntfy.sh/${{ vars.NTFY_TOPIC }}"

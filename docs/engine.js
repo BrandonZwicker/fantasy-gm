@@ -76,6 +76,32 @@ const REFERENCE_PPR = {
 // Below this the reference doesn't describe the player (IDP rows score ~0
 // under it), so no residual can be attributed.
 const MIN_REFERENCE = 0.5;
+
+// Sleeper's headline projection is a separate model from its own components, so
+// trusting it is only worth doing where it is actually more accurate. Measured
+// against 2025 results (weeks 1-14), adopting it cuts kicker RMSE from 4.84 to
+// 4.70, but pushes quarterbacks from 7.53 to 8.00 — their QB number runs about
+// 2.2 points hot. So it is applied to kickers only.
+const CALIBRATED_POSITIONS = new Set(['K']);
+
+// Standard deviation of weekly projection error, measured the same way. Used to
+// turn a projected edge into the odds it is real.
+export const PROJECTION_SD = { QB: 7.5, RB: 6.8, WR: 6.8, TE: 6.0, K: 4.7, DEF: 6.0 };
+export const DEFAULT_SD = 6.8;
+
+/** Odds the higher projection is genuinely the better start. */
+export function edgeConfidence(edge, posA, posB) {
+  const sa = PROJECTION_SD[posA] ?? DEFAULT_SD;
+  const sb = PROJECTION_SD[posB] ?? DEFAULT_SD;
+  const sd = Math.sqrt(sa * sa + sb * sb) || 1;
+  const z = edge / sd;
+  // Normal CDF via erf approximation (Abramowitz & Stegun 7.1.26).
+  const t = 1 / (1 + 0.3275911 * Math.abs(z) / Math.SQRT2);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+        - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z / 2);
+  const erf = z >= 0 ? y : -y;
+  return 0.5 * (1 + erf);
+}
 const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
 
 /* ---------------- league rules ---------------- */
@@ -124,9 +150,11 @@ export class LeagueRules {
    *  standard PPR this reproduces Sleeper's number exactly; for any other
    *  league it carries the same unexplained value onto that league's scale.
    */
-  scoreProjection(stats) {
+  scoreProjection(stats, position) {
     if (!stats) return 0;
     const own = dot(stats, this.scoring);
+    if (position != null && !CALIBRATED_POSITIONS.has(position))
+      return Math.round(own * 100) / 100;
     const sleeper = stats.pts_ppr;
     if (sleeper == null) return Math.round(own * 100) / 100;
     const reference = dot(stats, REFERENCE_PPR);
@@ -426,7 +454,7 @@ export class ProjectionBook {
     const out = {};
     for (const r of rows || []) {
       const pid = String(r.player_id || '');
-      if (pid) out[pid] = this.rules.scoreProjection(r.stats);
+      if (pid) out[pid] = this.rules.scoreProjection(r.stats, (r.player || {}).position);
     }
     this.seasonTotals = out;
     return out;

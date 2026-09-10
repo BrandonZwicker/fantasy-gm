@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from gm import db
 from gm.config import Config
@@ -162,6 +163,52 @@ def cmd_watch(args) -> int:
             return 0
 
 
+def cmd_digest(args) -> int:
+    """Short markdown digest for scheduled notifications."""
+    import os
+    cfg = Config.load()
+    league_id = args.league or os.environ.get("SLEEPER_LEAGUE_ID") or cfg.league_id
+    user_id = cfg.user_id
+    username = args.username or os.environ.get("SLEEPER_USERNAME") or cfg.username
+    if username and not user_id:
+        u = Sleeper().user(username)
+        user_id = u["user_id"] if u else None
+    if not (league_id and user_id):
+        _p("Set SLEEPER_LEAGUE_ID and SLEEPER_USERNAME, or run `cli.py link`.")
+        return 1
+
+    r = build_report(league_id, user_id, force=True, risk=args.risk)
+    urgent = [a for a in r.actions if a.priority <= args.max_priority]
+
+    lines = [f"## {r.league_name.strip()} — week {r.week}", ""]
+    if r.lineup_gain > 0.1:
+        lines.append(f"**{r.lineup_gain:.1f} projected points** available from lineup changes.")
+        lines.append("")
+    if not urgent:
+        lines.append("Nothing needs doing right now.")
+    for a in urgent:
+        unit = "this week" if a.kind == "start_sit" else "rest of season"
+        conf = ""
+        lines.append(f"- **{a.tier_label}** — {a.headline}")
+        lines.append(f"  - +{a.impact:.1f} pts {unit}{conf} · {a.horizon}")
+        if a.detail:
+            lines.append(f"  - {a.detail}")
+    if r.held_back:
+        lines.append("")
+        lines.append(f"_{r.held_back} smaller move(s) skipped at {args.risk} risk._")
+    lines.append("")
+    lines.append(f"Waivers: {r.next_waiver}")
+    if league_id and not league_id.startswith("EXAMPLE"):
+        lines.append(f"\nhttps://sleeper.com/leagues/{league_id}")
+
+    out = "\n".join(lines)
+    _p(out)
+    if args.out:
+        Path(args.out).write_text(out)
+    # Non-zero when there is nothing worth reporting, so a workflow can skip.
+    return 0 if urgent else 2
+
+
 def cmd_serve(args) -> int:
     import uvicorn
     _p(f"Dashboard: http://{args.host}:{args.port}")
@@ -187,6 +234,16 @@ def main() -> int:
     p = sub.add_parser("watch", help="poll for changes")
     p.add_argument("--every", type=int, default=900)
     p.set_defaults(fn=cmd_watch)
+
+    p = sub.add_parser("digest", help="short digest for scheduled alerts")
+    p.add_argument("--league")
+    p.add_argument("--username")
+    p.add_argument("--risk", default="balanced",
+                   choices=["cautious", "balanced", "aggressive"])
+    p.add_argument("--max-priority", type=int, default=2,
+                   help="only report actions at this tier or more urgent")
+    p.add_argument("--out", help="also write the digest to this file")
+    p.set_defaults(fn=cmd_digest)
 
     p = sub.add_parser("serve", help="run the web dashboard")
     p.add_argument("--host", default="127.0.0.1")

@@ -3,6 +3,7 @@
 import { Sleeper } from './engine.js';
 import { DEFAULT_RISK, RISK_PROFILES, assemble, buildReport, refine } from './report.js';
 import { EXAMPLE, PLATFORMS } from './providers.js';
+import { EVENT_KINDS, LEAD_TIMES, downloadICS } from './reminders.js';
 
 const KEY = 'fantasy-gm.session';
 const PREF = 'fantasy-gm.prefs';
@@ -11,7 +12,9 @@ const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); 
 const drop = (k) => { try { localStorage.removeItem(k); } catch {} };
 
 let SESSION = readJSON(KEY);
-let PREFS = { mode: 'tabs', tab: 'overview', risk: DEFAULT_RISK, ...(readJSON(PREF) || {}) };
+let PREFS = { mode: 'tabs', tab: 'overview', risk: DEFAULT_RISK,
+              remind: ['waivers', 'kickoff'], lead: '3h',
+              ...(readJSON(PREF) || {}) };
 let REPORT = null;
 let STATE = null;
 
@@ -156,9 +159,15 @@ function actionHTML(a) {
         <p>${o.bid ? '$' + o.bid + ' · ' : ''}worth ${(+o.net_gain).toFixed(1)} pts${
           o.drop_name ? ' · drop ' + esc(o.drop_name) : ''}${
           o.detail ? ' — ' + esc(o.detail) : ''}</p></div>`).join('')}</div></details>` : '';
-  const pts = a.impact > 0.05 ? `<span class="pillx pts">${a.impact.toFixed(1)} pts at stake</span>` : '';
-  const rate = (a.per_week > 0.05 && a.kind !== 'start_sit')
+  // Say which horizon a number covers — a single week and a whole rest-of-season
+  // are not the same unit and shouldn't look alike.
+  const horizonWord = a.unit === 'week' ? 'this week' : 'rest of season';
+  const pts = a.impact > 0.05
+    ? `<span class="pillx pts">+${a.impact.toFixed(1)} pts ${horizonWord}</span>` : '';
+  const rate = (a.per_week > 0.05 && a.unit !== 'week')
     ? `<span class="pillx">${a.per_week.toFixed(1)} / week</span>` : '';
+  const conf = a.confidence != null
+    ? `<span class="pillx conf">${Math.round(a.confidence * 100)}% likely right</span>` : '';
   return `<div class="act">
     <div class="line">
       <span class="rk ${a.rank <= 2 ? 'top' : ''}">${a.rank}</span>
@@ -166,7 +175,7 @@ function actionHTML(a) {
       <div class="actbody"><h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
     </div>
-    <div class="meta-row">${pts}${rate}
+    <div class="meta-row">${pts}${rate}${conf}
       ${a.horizon ? `<span class="pillx when">${esc(a.horizon)}</span>` : ''}</div>
     ${(whyHTML || altHTML) ? `<div class="disc">${whyHTML}${altHTML}</div>` : ''}
   </div>`;
@@ -279,6 +288,36 @@ const CARDS = {
       <div class="in">${body}</div></div>`;
   },
 
+  reminders(r) {
+    const link = r.league_id && r.league_id !== 'EXAMPLE'
+      ? `<a class="sleeperlink" href="https://sleeper.com/leagues/${esc(r.league_id)}" target="_blank" rel="noopener">Open this league on Sleeper →</a>`
+      : '';
+    return `<div class="card"><header><h3>Reminders</h3>
+      <span class="note">so you don't miss the window</span></header>
+      <div class="in">
+        <p class="remind-lede">This site has no server, so it can't message you
+          on its own. It can hand your calendar the schedule instead — an alarm
+          before every deadline, timed to this league's settings.</p>
+        <div class="remind-group">
+          <div class="remind-lbl">Remind me about</div>
+          ${EVENT_KINDS.map(k => `<label class="chk">
+            <input type="checkbox" data-kind="${k.id}" ${PREFS.remind.includes(k.id) ? 'checked' : ''}>
+            <span>${esc(k.label)} <em>${esc(k.hint)}</em></span></label>`).join('')}
+        </div>
+        <div class="remind-group">
+          <div class="remind-lbl">How far ahead</div>
+          <div class="seg lead" id="leadseg">
+            ${LEAD_TIMES.map(l => `<button data-lead="${l.id}" class="${PREFS.lead === l.id ? 'on' : ''}">${esc(l.label)}</button>`).join('')}
+          </div>
+        </div>
+        <button class="btn solid" id="dlics">Add to my calendar</button>
+        <p class="remind-foot">Downloads an .ics your phone or laptop can import.
+          Want real push notifications instead? The Python version can poll on a
+          schedule — see the repo.</p>
+        ${link}
+      </div></div>`;
+  },
+
   rules(r) {
     return `<div class="card"><header><h3>House rules</h3></header>
       <div class="in"><ul class="rules">
@@ -302,7 +341,7 @@ function tabBody(r, tab) {
     case 'waivers':  return CARDS.waivers(r) + CARDS.drops(r);
     case 'trades':   return CARDS.trades(r);
     case 'activity': return CARDS.activity(r);
-    case 'league':   return CARDS.rules(r);
+    case 'league':   return CARDS.rules(r) + CARDS.reminders(r);
     default:         return CARDS.hero(r) + CARDS.actions(r);
   }
 }
@@ -346,7 +385,7 @@ function render(r, { isExample }) {
     ? `<main>${CARDS.hero(r)}
         <div class="cols">
           <div>${CARDS.actions(r)}${CARDS.lineup(r)}${CARDS.trades(r)}</div>
-          <div>${CARDS.waivers(r)}${CARDS.drops(r)}${CARDS.activity(r)}${CARDS.rules(r)}</div>
+          <div>${CARDS.waivers(r)}${CARDS.drops(r)}${CARDS.activity(r)}${CARDS.rules(r)}${CARDS.reminders(r)}</div>
         </div></main>`
     : `<main class="focused">${tabBody(r, tab)}</main>`;
   app().appendChild(node(body));
@@ -372,6 +411,28 @@ function render(r, { isExample }) {
     // Recompute from the loaded state; no refetch needed.
     if (STATE) assemble(STATE, { risk: v }).then(rep => render(rep, { isExample }));
   };
+  // Reminder controls (present on the League tab and in one-page mode).
+  const leadSeg = document.getElementById('leadseg');
+  if (leadSeg) leadSeg.onclick = (e) => {
+    const v = e.target.dataset.lead;
+    if (!v) return;
+    PREFS.lead = v; savePrefs();
+    [...leadSeg.children].forEach(c => c.classList.toggle('on', c.dataset.lead === v));
+  };
+  document.querySelectorAll('[data-kind]').forEach(box => {
+    box.onchange = () => {
+      PREFS.remind = [...document.querySelectorAll('[data-kind]')]
+        .filter(b => b.checked).map(b => b.dataset.kind);
+      savePrefs();
+    };
+  });
+  const dl = document.getElementById('dlics');
+  if (dl) dl.onclick = () => {
+    const mins = (LEAD_TIMES.find(l => l.id === PREFS.lead) || LEAD_TIMES[1]).minutes;
+    downloadICS(r, { kinds: PREFS.remind, leadMinutes: mins });
+    hint('Calendar file downloaded — open it to add the reminders');
+  };
+
   const tabsEl = document.getElementById('tabs');
   if (tabsEl) tabsEl.onclick = (e) => {
     const t = e.target.dataset.tab;

@@ -4,7 +4,7 @@
 
 import {
   LeagueState, SLOT_ELIGIBILITY, Sleeper,
-  optimize, replacementLevels, vor,
+  edgeConfidence, optimize, replacementLevels, vor,
 } from './engine.js';
 import {
   detectChanges, dropCandidates, findTrades, recommendWaivers, tradeChips,
@@ -19,32 +19,43 @@ const URGENCY = { lineup: 3.2, waiver: 1.6, trade: 0.9, info: 0.35 };
 
 /* How big an edge has to be before a move is worth making.
  *
- * Weekly projections carry several points of error, so a move that gains 0.8
- * projected points is inside the noise — you are as likely to lose by making it
- * as to gain. These floors filter that churn out. Warnings (a bye or an injured
- * starter) are never filtered: those are certainties, not edges.
+ * Grounded in measured error, not taste. Comparing 2025 projections against
+ * what actually happened, weekly projections carry a standard deviation of
+ * roughly 6.8 points for skill players — so the gap between two players has an
+ * SD near 9.6. A 1-point edge is therefore right only 54% of the time; 2.5
+ * points gets you to 60%, and 5 points to 70%.
+ *
+ * The floors also reflect what a move costs, which differs by kind:
+ *   - a start/sit is free and reversible until kickoff, so it only has to beat
+ *     the noise
+ *   - a waiver claim costs an irreversible drop plus finite FAAB or priority,
+ *     so it has to clear a good deal more than break-even
+ *   - a trade permanently swaps an asset
+ *
+ * Warnings (a bye, an injured starter) are never filtered: those are
+ * certainties, not projected edges.
  */
 export const RISK_PROFILES = {
   cautious: {
     label: 'Cautious',
-    blurb: 'Only clear, decisive edges. Fewest moves.',
-    startSit: 3.0,      // projected points this week
-    waiverPerWeek: 1.0, // projected points per remaining week
-    tradeGain: 10.0,    // projected points rest-of-season
+    blurb: 'Only moves that are ~70% likely to be right.',
+    startSit: 5.0,       // points this week — about 70% confidence
+    waiverPerWeek: 3.0,  // points per remaining week
+    tradeGain: 15.0,     // points rest-of-season
   },
   balanced: {
     label: 'Balanced',
-    blurb: 'Skips moves inside the projection noise.',
-    startSit: 1.5,
-    waiverPerWeek: 0.4,
-    tradeGain: 5.0,
+    blurb: 'Skips anything inside the projection noise.',
+    startSit: 2.5,       // about 60% confidence
+    waiverPerWeek: 1.5,
+    tradeGain: 8.0,
   },
   aggressive: {
     label: 'Aggressive',
-    blurb: 'Chases every edge, however small.',
-    startSit: 0.3,
-    waiverPerWeek: 0.1,
-    tradeGain: 2.0,
+    blurb: 'Takes any edge, even a coin flip.',
+    startSit: 1.0,       // about 54% confidence
+    waiverPerWeek: 0.5,
+    tradeGain: 3.0,
   },
 };
 export const DEFAULT_RISK = 'balanced';
@@ -189,6 +200,15 @@ export async function assemble(state, { onProgress = () => {},
         + `at a time, so flex spots get filled optimally. This is the best legal `
         + `arrangement of the players you have, totalling ${lineup.total.toFixed(1)} `
         + `projected points.` });
+      if (op) {
+        const conf = edgeConfidence(gain, np?.position, op.position);
+        why.push({ h: 'How sure is this?', t:
+          `Weekly projections miss by about 6.8 points on average, so a `
+          + `${gain.toFixed(1)}-point edge is right roughly `
+          + `${Math.round(conf * 100)}% of the time. Worth making because the `
+          + `move is free and reversible until kickoff — but it is an edge, not `
+          + `a certainty.` });
+      }
       why.push({ h: 'The clock', t:
         `Lineup changes are only worth anything before kickoff. Once the game `
         + `starts this is unrecoverable, which is why it outranks waiver and `
@@ -201,6 +221,8 @@ export async function assemble(state, { onProgress = () => {},
         detail: `${inPts.toFixed(1)} proj vs ${outPts.toFixed(1)} — +${gain.toFixed(1)} pts in week ${week}`,
         payload: { player_id: newPid, slot: slotName, bench: outPid, gain },
         impact: gain, per_week: gain, weight: gain * URGENCY.lineup,
+        unit: 'week', confidence: op
+          ? edgeConfidence(gain, np?.position, op.position) : null,
         horizon: `Before week ${week} kickoff`, reasoning: why,
       });
     }
@@ -264,7 +286,7 @@ export async function assemble(state, { onProgress = () => {},
             net_gain: a.net_gain, drop_name: a.drop_name, detail: a.rationale,
           })),
         },
-        impact: w.net_gain, per_week: r2(perWeek),
+        impact: w.net_gain, per_week: r2(perWeek), unit: 'ros',
         weight: perWeek * URGENCY.waiver,
         horizon: `Waivers run ${nextWaiver}`, reasoning: w.reasoning,
       });
@@ -305,7 +327,7 @@ export async function assemble(state, { onProgress = () => {},
             detail: `${a.acceptance} to be accepted · them +${a.their_gain.toFixed(1)}`,
           })),
         },
-        impact: t.my_gain, per_week: r2(perWeek),
+        impact: t.my_gain, per_week: r2(perWeek), unit: 'ros',
         weight: perWeek * URGENCY.trade * (acceptFactor[t.acceptance] ?? 0.5),
         horizon: `Trade deadline week ${rules.tradeDeadlineWeek}`,
         reasoning: [
@@ -409,6 +431,7 @@ export async function assemble(state, { onProgress = () => {},
     actions, waivers, drops, trades, changes, trade_note: tradeNote,
     faab_left: faabLeft, next_waiver: nextWaiver, deadlines,
     risk, risk_profile: floor,
+    waiver_day_of_week: rules.waiverDayOfWeek,
     held_back: held.length,
     held_back_detail: held
       .sort((a, b) => b.impact - a.impact)
