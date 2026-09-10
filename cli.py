@@ -177,7 +177,7 @@ def cmd_digest(args) -> int:
         _p("Set SLEEPER_LEAGUE_ID and SLEEPER_USERNAME, or run `cli.py link`.")
         return 1
 
-    r = build_report(league_id, user_id, force=True, risk=args.risk)
+    r = build_report(league_id, user_id, force=True)
     urgent = [a for a in r.actions if a.priority <= args.max_priority]
 
     lines = [f"## {r.league_name.strip()} — week {r.week}", ""]
@@ -195,7 +195,7 @@ def cmd_digest(args) -> int:
             lines.append(f"  - {a.detail}")
     if r.held_back:
         lines.append("")
-        lines.append(f"_{r.held_back} smaller move(s) skipped at {args.risk} risk._")
+        lines.append(f"_{r.held_back} move(s) too small to be worth making._")
     lines.append("")
     lines.append(f"Waivers: {r.next_waiver}")
     if league_id and not league_id.startswith("EXAMPLE"):
@@ -238,8 +238,6 @@ def main() -> int:
     p = sub.add_parser("digest", help="short digest for scheduled alerts")
     p.add_argument("--league")
     p.add_argument("--username")
-    p.add_argument("--risk", default="balanced",
-                   choices=["cautious", "balanced", "aggressive"])
     p.add_argument("--max-priority", type=int, default=2,
                    help="only report actions at this tier or more urgent")
     p.add_argument("--out", help="also write the digest to this file")

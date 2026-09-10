@@ -10,8 +10,7 @@
 #        SLEEPER_USERNAME   your Sleeper handle
 #        SLEEPER_LEAGUE_ID  from the league URL
 #      Optional variables:
-#        RISK               cautious | balanced | aggressive   (default balanced)
-#        NTFY_TOPIC         a topic name to push to your phone via ntfy.sh
+##        NTFY_TOPIC         a topic name to push to your phone via ntfy.sh
 #   2. Adjust the cron lines below to change how often it checks.
 
 name: League monitor
@@ -46,7 +45,7 @@ jobs:
           SLEEPER_LEAGUE_ID: ${{ vars.SLEEPER_LEAGUE_ID }}
         run: |
           set +e
-          python cli.py digest --risk "${{ vars.RISK || 'balanced' }}" --out digest.md
+          python cli.py digest --out digest.md
           echo "code=$?" >> "$GITHUB_OUTPUT"
           cat digest.md >> "$GITHUB_STEP_SUMMARY"
 
