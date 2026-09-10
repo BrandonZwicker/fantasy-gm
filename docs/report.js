@@ -16,6 +16,39 @@ const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
 // How hard each kind of move is pressed by the clock. A lineup change is
 // worthless once kickoff passes; a trade has weeks of runway.
 const URGENCY = { lineup: 3.2, waiver: 1.6, trade: 0.9, info: 0.35 };
+
+/* How big an edge has to be before a move is worth making.
+ *
+ * Weekly projections carry several points of error, so a move that gains 0.8
+ * projected points is inside the noise — you are as likely to lose by making it
+ * as to gain. These floors filter that churn out. Warnings (a bye or an injured
+ * starter) are never filtered: those are certainties, not edges.
+ */
+export const RISK_PROFILES = {
+  cautious: {
+    label: 'Cautious',
+    blurb: 'Only clear, decisive edges. Fewest moves.',
+    startSit: 3.0,      // projected points this week
+    waiverPerWeek: 1.0, // projected points per remaining week
+    tradeGain: 10.0,    // projected points rest-of-season
+  },
+  balanced: {
+    label: 'Balanced',
+    blurb: 'Skips moves inside the projection noise.',
+    startSit: 1.5,
+    waiverPerWeek: 0.4,
+    tradeGain: 5.0,
+  },
+  aggressive: {
+    label: 'Aggressive',
+    blurb: 'Chases every edge, however small.',
+    startSit: 0.3,
+    waiverPerWeek: 0.1,
+    tradeGain: 2.0,
+  },
+};
+export const DEFAULT_RISK = 'balanced';
+const profileFor = (r) => RISK_PROFILES[r] || RISK_PROFILES[DEFAULT_RISK];
 const TIERS = [[6, 1, 'Do now'], [2, 2, 'This week'],
                [0.6, 3, 'Worth doing'], [0, 4, 'Optional']];
 const tierOf = (w) => {
@@ -25,6 +58,7 @@ const tierOf = (w) => {
 
 export async function buildReport(leagueId, userId, { anonymize = false,
                                                       source = null,
+                                                      risk = DEFAULT_RISK,
                                                       onProgress = () => {} } = {}) {
   onProgress('Reading league settings…');
   const state = await LeagueState.load(leagueId, userId, { anonymize, source });
@@ -41,7 +75,7 @@ export async function buildReport(leagueId, userId, { anonymize = false,
     state.projections.loadWeek(week),
   ]);
 
-  return assemble(state, { onProgress });
+  return assemble(state, { onProgress, risk });
 }
 
 /** Load remaining weeks so byes and rest-of-season sharpen. */
@@ -61,7 +95,9 @@ export async function refine(state, onProgress = () => {}) {
 const rulesLastWeek = (state) => Math.max(state.currentWeek,
                                           state.rules.playoffWeekStart - 1);
 
-export async function assemble(state, { onProgress = () => {} } = {}) {
+export async function assemble(state, { onProgress = () => {},
+                                        risk = DEFAULT_RISK } = {}) {
+  const floor = profileFor(risk);
   const rules = state.rules;
   const week = state.currentWeek;
   const me = state.me;
@@ -236,7 +272,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
 
     /* ---- trades ---- */
     onProgress('Searching every roster for trades…');
-    trades = findTrades(state, ros, levels, { limit: 6 });
+    trades = findTrades(state, ros, levels, { limit: 6, minMyGain: floor.tradeGain });
     if (!trades.length) {
       const chips = tradeChips(state, ros, levels, 2)
         .map(([pid]) => state.players.name(pid));
@@ -320,6 +356,19 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     });
   }
 
+  // Drop moves whose edge is too small to be worth acting on. Warnings stay:
+  // a bye week is a certainty, not a projected edge.
+  const belowFloor = (a) => {
+    if (a.kind === 'start_sit') return a.impact < floor.startSit;
+    if (a.kind === 'waiver') return a.per_week < floor.waiverPerWeek;
+    if (a.kind === 'trade') return a.impact < floor.tradeGain;
+    return false;
+  };
+  const held = actions.filter(belowFloor);
+  const kept = actions.filter(a => !belowFloor(a));
+  actions.length = 0;
+  actions.push(...kept);
+
   // One scale: points at stake, weighted by how soon the chance to act goes.
   actions.sort((a, b) => b.weight - a.weight);
   actions.forEach((a, i) => {
@@ -359,6 +408,12 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     lineup, current_starters: currentStarters, lineup_gain: lineupGain,
     actions, waivers, drops, trades, changes, trade_note: tradeNote,
     faab_left: faabLeft, next_waiver: nextWaiver, deadlines,
+    risk, risk_profile: floor,
+    held_back: held.length,
+    held_back_detail: held
+      .sort((a, b) => b.impact - a.impact)
+      .slice(0, 6)
+      .map(a => ({ headline: a.headline, impact: a.impact, kind: a.kind })),
     uses_faab: rules.usesFaab, waiver_type: rules.waiverType,
     waiver_position: me ? me.waiver_position : 0,
     player_names: names,

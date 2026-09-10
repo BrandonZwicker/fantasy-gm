@@ -201,6 +201,8 @@ tr.bench td{opacity:.55}
   border-radius:12px;margin-bottom:9px;cursor:pointer;transition:.15s ease}
 .opt-row:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:var(--shadow)}
 .opt-row b{font-size:14.5px;font-weight:600}
+.opt-row.resume{border-color:var(--accent);background:var(--accent-soft)}
+.opt-row.resume:hover{border-color:var(--accent)}
 .opt-row .s{color:var(--ink-3);font-size:12.5px;margin-top:2px}
 .opt-row .arw{color:var(--ink-3)}
 .rule{display:flex;align-items:center;gap:12px;color:var(--ink-3);
@@ -262,6 +264,13 @@ main.focused{max-width:840px}
 .try-in .s{color:var(--ink-3);font-size:12.5px;line-height:1.5;max-width:330px}
 .try-in .btn{margin-left:auto;white-space:nowrap;width:auto;padding:11px 18px}
 .sub2{display:block;color:var(--ink-3);font-size:11.5px;margin-top:2px}
+.heldback{margin-top:14px;border-top:1px solid var(--line-2);padding-top:12px}
+.heldback summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink-3);
+  list-style:none;display:inline-flex;align-items:center;gap:5px}
+.heldback summary::-webkit-details-marker{display:none}
+.heldback summary::before{content:'▸';font-size:10px;transition:transform .15s}
+.heldback[open] summary::before{transform:rotate(90deg)}
+.heldback summary:hover{color:var(--ink-2)}
 
 /* ---------------- mobile ---------------- */
 @media (max-width: 700px){

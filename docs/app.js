@@ -1,7 +1,7 @@
 /* Fantasy GM — UI. Everything runs client-side; there is no server. */
 
 import { Sleeper } from './engine.js';
-import { assemble, buildReport, refine } from './report.js';
+import { DEFAULT_RISK, RISK_PROFILES, assemble, buildReport, refine } from './report.js';
 import { EXAMPLE, PLATFORMS } from './providers.js';
 
 const KEY = 'fantasy-gm.session';
@@ -11,7 +11,7 @@ const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); 
 const drop = (k) => { try { localStorage.removeItem(k); } catch {} };
 
 let SESSION = readJSON(KEY);
-let PREFS = readJSON(PREF) || { mode: 'tabs', tab: 'overview' };
+let PREFS = { mode: 'tabs', tab: 'overview', risk: DEFAULT_RISK, ...(readJSON(PREF) || {}) };
 let REPORT = null;
 let STATE = null;
 
@@ -49,6 +49,12 @@ function renderGate(msg) {
 
     ${msg ? `<div class="warn">${esc(msg)}</div>` : ''}
 
+    ${SESSION ? `<div class="opt-row resume" id="resume"><div>
+        <b>Continue with ${esc(SESSION.kind === 'example' ? 'the example league'
+                                : (SESSION.league_name || 'your league').trim())}</b>
+        <div class="s">picked up where you left off</div></div>
+      <span class="arw">→</span></div>` : ''}
+
     <input class="field" id="u" placeholder="Sleeper username" autocomplete="off" spellcheck="false">
     <button class="btn solid" id="go">Find my leagues</button>
 
@@ -75,6 +81,8 @@ function renderGate(msg) {
   const inp = g.querySelector('#u'), out = g.querySelector('#out');
   const go = g.querySelector('#go'), lid = g.querySelector('#lid');
   g.querySelector('#demo').onclick = () => startExample();
+  const resume = g.querySelector('#resume');
+  if (resume) resume.onclick = () => run();
   inp.focus();
 
   const choose = (username, user_id, l) => {
@@ -166,13 +174,20 @@ function actionHTML(a) {
 
 const CARDS = {
   hero(r) {
-    const up = r.lineup_gain > 0.1;
+    const floor = r.risk_profile?.startSit ?? 0.1;
+    const up = r.lineup_gain >= floor;
+    // A gain that exists but sits under the threshold is noise, not an
+    // opportunity — say so rather than dangling a number we won't act on.
+    const marginal = !up && r.lineup_gain > 0.1;
     return `<div class="hero">
       <div class="fig ${up ? '' : 'flat'}">${up ? '+' + r.lineup_gain.toFixed(1) : '✓'}</div>
       <div class="say">
-        <h2>${up ? 'Points left on your bench' : 'Your lineup is set correctly'}</h2>
+        <h2>${up ? 'Points left on your bench'
+                 : marginal ? 'Lineup is good enough'
+                 : 'Your lineup is set correctly'}</h2>
         <p>${up ? `Fixing your week ${r.week} lineup is worth ${r.lineup_gain.toFixed(1)} more projected points.`
-                : `Nothing to change for week ${r.week} — the optimal starters are already in.`}</p>
+             : marginal ? `The best change available is worth ${r.lineup_gain.toFixed(1)} points — inside the projection noise, so it isn't worth the move.`
+             : `Nothing to change for week ${r.week} — the optimal starters are already in.`}</p>
       </div>
       <div class="meta">
         <div><div class="k">Record</div><div class="v">${esc(r.record)}</div></div>
@@ -183,9 +198,17 @@ const CARDS = {
   },
 
   actions(r) {
-    const body = r.actions.length ? r.actions.map(actionHTML).join('')
+    const held = r.held_back
+      ? `<details class="heldback"><summary>${r.held_back} smaller move${r.held_back > 1 ? 's' : ''} not worth making at ${(r.risk_profile?.label || '').toLowerCase()} risk</summary>
+           <div class="rz">${(r.held_back_detail || []).map(h => `<div class="st">
+             <h5>${esc(h.headline)}</h5><p>worth ${(+h.impact).toFixed(1)} pts</p></div>`).join('')}
+           <div class="st"><p>Projections carry a few points of error, so edges
+             this small are as likely to cost you as gain you. Raise the risk
+             setting above to act on them anyway.</p></div></div></details>`
+      : '';
+    const body = r.actions.length ? r.actions.map(actionHTML).join('') + held
       : `<div class="allclear"><span class="big">All clear</span>
-         No moves needed right now. Check back after the next games.</div>`;
+         No moves worth making right now. Check back after the next games.</div>${held}`;
     return `<div class="card"><header><h3>What to do</h3>
       <span class="note">${r.actions.length} item${r.actions.length === 1 ? '' : 's'} · ranked by points at stake and how soon you lose the chance</span></header>
       <div class="in">${body}</div></div>`;
@@ -297,6 +320,13 @@ function render(r, { isExample }) {
       <div class="crumb">Week ${r.week} · <b>${esc(r.my_team)}</b> · ${esc(r.record)}</div>
       <div class="grow"></div>
       <div class="viewsel">
+        <span class="viewlbl">Risk</span>
+        <div class="seg" id="riskseg">
+          ${Object.entries(RISK_PROFILES).map(([k, v]) =>
+            `<button data-risk="${k}" title="${esc(v.blurb)}" class="${PREFS.risk === k ? 'on' : ''}">${esc(v.label)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="viewsel">
         <span class="viewlbl">Page view</span>
         <div class="seg" id="seg">
           <button data-mode="tabs" class="${mode === 'tabs' ? 'on' : ''}">Sections</button>
@@ -335,6 +365,13 @@ function render(r, { isExample }) {
     if (!m || m === PREFS.mode) return;
     PREFS.mode = m; savePrefs(); render(r, { isExample });
   };
+  document.getElementById('riskseg').onclick = (e) => {
+    const v = e.target.dataset.risk;
+    if (!v || v === PREFS.risk) return;
+    PREFS.risk = v; savePrefs();
+    // Recompute from the loaded state; no refetch needed.
+    if (STATE) assemble(STATE, { risk: v }).then(rep => render(rep, { isExample }));
+  };
   const tabsEl = document.getElementById('tabs');
   if (tabsEl) tabsEl.onclick = (e) => {
     const t = e.target.dataset.tab;
@@ -366,7 +403,7 @@ async function run(force) {
 
   loading(isExample ? 'the example league' : SESSION.league_name);
   try {
-    let opts = { onProgress: setProg }, leagueId, userId;
+    let opts = { onProgress: setProg, risk: PREFS.risk }, leagueId, userId;
     if (isExample) {
       const ex = await EXAMPLE.load();
       opts.source = ex.source;
@@ -383,7 +420,7 @@ async function run(force) {
     // rest in the background so byes and rest-of-season sharpen, then
     // quietly re-render.
     refine(r._state).then(async () => {
-      const better = await assemble(r._state);
+      const better = await assemble(r._state, { risk: PREFS.risk });
       render(better, { isExample });
       hint('Updated with the full remaining schedule');
     }).catch(() => {});
@@ -393,5 +430,7 @@ async function run(force) {
   }
 }
 
-// Default view is the sign-in page unless a league was chosen previously.
-run();
+// Always land on the sign-in page. A remembered league is offered there as a
+// one-click "Continue" rather than loaded automatically, so opening the link
+// never drops a visitor straight into somebody else's team.
+renderGate();

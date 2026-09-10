@@ -1,6 +1,6 @@
 # Fantasy GM
 
-**[Live demo](https://brandonzwicker.github.io/fantasy-gm/)**
+**[Try it out](https://brandonzwicker.github.io/fantasy-gm/)**
 
 I play in a Sleeper league and don't really watch football. So I built something
 that reads the league for me and says exactly what to do — who to start, who to
@@ -40,6 +40,14 @@ teams. Offers that would look insulting get filtered out rather than shown.
 lose the chance to act. Lineup changes lock at kickoff, so they outrank trades
 with weeks of runway.
 
+**Risk setting.** A move that gains 0.8 projected points isn't worth making —
+weekly projections carry a few points of error, so an edge that small is as
+likely to cost you as gain you. There's a Cautious / Balanced / Aggressive
+toggle that sets how big an edge has to be before something gets recommended.
+Balanced is the default. Whatever gets filtered out is still listed underneath,
+collapsed, so you can see what you're skipping. Bye weeks and injured starters
+are never filtered — those are certainties, not edges.
+
 Mutually exclusive moves collapse into one recommendation with fallbacks — three
 defenses competing for the same bench spot is one move, not three. Every
 suggestion explains its reasoning if you open it.
@@ -53,6 +61,7 @@ Most of these shipped broken first and got caught:
 - Don't offer two trades that together send away both quarterbacks
 - Don't say "start this QB over that tight end"
 - Don't suggest shuffling a player between RB and FLEX for zero points
+- Don't push a move whose edge is smaller than the error on the projection
 
 ## Checking the math
 
