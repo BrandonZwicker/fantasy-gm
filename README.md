@@ -2,7 +2,7 @@
 
 **[Try it out](https://brandonzwicker.github.io/fantasy-gm/)**
 
-I play in a Sleeper league and don't really watch football. So I built something
+I play in a Sleeper league and don't really have enough time to follow football. So I built something
 that reads the league for me and says exactly what to do — who to start, who to
 claim, which trades to offer.
 
