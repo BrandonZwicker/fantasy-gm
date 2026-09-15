@@ -268,22 +268,54 @@ const CARDS = {
   },
 
   lineup(r) {
+    // This table shows the lineup we are RECOMMENDING, not the one currently
+    // set in Sleeper. Labelling it "Week N lineup" made it look like stale
+    // data whenever it differed, which is exactly when it matters most.
+    const current = new Set((r.current_starters || []).filter(p => p && p !== '0'));
+    const proposed = new Set(r.lineup?.slots.map(s => s.player_id).filter(Boolean) || []);
+    const comingIn = [...proposed].filter(p => !current.has(p));
+    const goingOut = [...current].filter(p => !proposed.has(p));
+    const changes = comingIn.length;
+
     const shown = (id, adjusted) => {
       const p = pinfo(id);
       if (p.raw == null || Math.abs(p.raw - adjusted) < 0.05) return adjusted.toFixed(1);
       // Never quietly show a different number than the app: give both.
       return `${p.raw.toFixed(1)}<span class="adj">${adjusted.toFixed(1)} exp.</span>`;
     };
-    const rows = (r.lineup?.slots || []).map(s => `
-      <tr class="${s.locked ? 'lockedrow' : ''}"><td><span class="slot">${esc(s.slot)}</span></td>
-        <td class="who">${who(s.player_id)}${s.locked ? '<span class="lockicon" title="game has kicked off">locked</span>' : ''}</td>
-        <td class="n">${s.player_id ? shown(s.player_id, s.points) : s.points.toFixed(1)}</td></tr>`).join('');
-    const bench = (r.lineup?.bench || []).slice(0, 10).map(([id, p]) => `
-      <tr class="bench"><td><span class="slot bn">BN</span></td>
-        <td class="who">${who(id)}</td><td class="n dim">${shown(id, p)}</td></tr>`).join('');
-    return `<div class="card"><header><h3>Week ${r.week} lineup</h3>
-      <span class="note">${r.lineup ? r.lineup.total.toFixed(1) : '—'} projected</span></header>
-      <div class="in"><table>
+
+    const rows = (r.lineup?.slots || []).map(s => {
+      const swapIn = s.player_id && !current.has(s.player_id);
+      return `<tr class="${s.locked ? 'lockedrow' : ''}${swapIn ? ' swapin' : ''}">
+        <td><span class="slot">${esc(s.slot)}</span></td>
+        <td class="who">${who(s.player_id)}
+          ${swapIn ? '<span class="movetag in">start him</span>' : ''}
+          ${s.locked ? '<span class="lockicon" title="game has kicked off">locked</span>' : ''}</td>
+        <td class="n">${s.player_id ? shown(s.player_id, s.points) : s.points.toFixed(1)}</td></tr>`;
+    }).join('');
+
+    const bench = (r.lineup?.bench || []).slice(0, 10).map(([id, p]) => {
+      const swapOut = current.has(id);
+      return `<tr class="bench${swapOut ? ' swapout' : ''}">
+        <td><span class="slot bn">BN</span></td>
+        <td class="who">${who(id)}
+          ${swapOut ? '<span class="movetag out">bench him</span>' : ''}</td>
+        <td class="n dim">${shown(id, p)}</td></tr>`;
+    }).join('');
+
+    const note = r.lineup_locked
+      ? 'week is locked, nothing can move'
+      : changes
+        ? `${changes} change${changes > 1 ? 's' : ''} from what you have set`
+        : 'matches what you have set in Sleeper';
+
+    const banner = changes ? `<div class="lineup-note">
+      This is the lineup to move to, not the one you have set. Sleeper still has
+      ${goingOut.map(p => `<b>${esc(pinfo(p).name)}</b>`).join(' and ')} starting.</div>` : '';
+
+    return `<div class="card"><header><h3>Recommended lineup</h3>
+      <span class="note">${esc(note)} · ${r.lineup ? r.lineup.total.toFixed(1) : '—'} projected</span></header>
+      <div class="in">${banner}<table>
         <tr><th style="width:64px">Slot</th><th>Player</th><th class="n">Proj</th></tr>
         ${rows}${bench}</table></div></div>`;
   },
