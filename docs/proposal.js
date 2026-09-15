@@ -148,6 +148,7 @@ export function buildCase(state, trade, ros) {
 
   return {
     partner: them.label,
+    myTeam: me.label,
     league: rules.name.trim(),
     week: state.currentWeek,
     theyGet: trade.send.map(detail),
@@ -175,25 +176,26 @@ export function buildKeyPoints(c) {
   const give = c.theyGive.map(p => p.name).join(' + ');
   const tag = (p) => `${p.name} is ${p.rank || p.position} rest of season, ${p.perWeek}/wk, ${p.vor >= 0 ? '+' : ''}${p.vor} over replacement`;
 
-  pts.push(`${c.partner} gets ${get}, gives ${give}`);
+  pts.push(`${c.partner} gets ${get}, ${c.myTeam} gets ${give}`);
   for (const p of c.theyGet) pts.push(tag(p));
   for (const p of c.theyGive) pts.push(tag(p));
 
   if (c.slotUpgrade) {
     const u = c.slotUpgrade;
-    pts.push(`Their ${u.slot} goes from ${u.out.name} at ${u.out.perWeek}/wk to `
+    pts.push(`${c.partner} ${u.slot} goes from ${u.out.name} at ${u.out.perWeek}/wk to `
       + `${u.in.name} at ${u.in.perWeek}/wk, ${u.perWeek >= 0 ? '+' : ''}${u.perWeek} a week in that slot`);
   }
-  pts.push(`Their starting lineup ${c.theirGain >= 0 ? '+' : ''}${c.theirGain} over ${c.weeks} weeks, `
+  pts.push(`${c.partner} starting lineup ${c.theirGain >= 0 ? '+' : ''}${c.theirGain} over ${c.weeks} weeks, `
     + `${c.theirPerWeek >= 0 ? '+' : ''}${c.theirPerWeek} a week`);
-  pts.push(`Yours ${c.myGain >= 0 ? '+' : ''}${c.myGain}, ${c.myPerWeek >= 0 ? '+' : ''}${c.myPerWeek} a week`);
+  pts.push(`${c.myTeam} ${c.myGain >= 0 ? '+' : ''}${c.myGain} over the same stretch, `
+    + `${c.myPerWeek >= 0 ? '+' : ''}${c.myPerWeek} a week`);
 
   for (const d of c.depth) {
-    pts.push(`Their ${d.position} depth ${d.before} → ${d.after}, they start ${d.starts}`);
+    pts.push(`${c.partner} ${d.position} depth ${d.before} → ${d.after}, starting ${d.starts}`);
   }
   pts.push(c.givingUpStarter
-    ? `${give} currently starts for them, so this is not spare depth`
-    : `${give} is not in their starting lineup`);
+    ? `${give} currently starts for ${c.partner}, so this is not spare depth`
+    : `${give} is not in the ${c.partner} starting lineup`);
   pts.push(`Value sent / received ${c.valueRatio}x${c.valueRatio >= 0.9 && c.valueRatio <= 1.1 ? ', roughly even' : ''}`);
   pts.push(`Scored on ${c.league} settings, not generic PPR`);
   return pts;
@@ -222,14 +224,14 @@ export function buildSVG(c) {
 
   // Header
   y = 48;
-  out.push(text(L, y, c.partner, { size: 20, weight: 700 }));
+  out.push(text(L, y, `${c.partner}  ⇄  ${c.myTeam}`, { size: 20, weight: 700 }));
   out.push(text(R, y, `${c.league} · week ${c.week}`, { size: 13, fill: DIM, anchor: 'end' }));
   rule();
 
   // Who moves
   const colTop = y + 26;
-  out.push(text(L, colTop, 'THEY RECEIVE', { size: 11, weight: 700, spacing: 1.5, fill: DIM }));
-  out.push(text(520, colTop, 'THEY SEND', { size: 11, weight: 700, spacing: 1.5, fill: DIM }));
+  out.push(text(L, colTop, `${c.partner.toUpperCase()} GETS`, { size: 11, weight: 700, spacing: 1.5, fill: DIM }));
+  out.push(text(520, colTop, `${c.myTeam.toUpperCase()} GETS`, { size: 11, weight: 700, spacing: 1.5, fill: DIM }));
   const block = (x, list) => list.forEach((p, i) => {
     const top = colTop + 34 + i * 74;
     out.push(text(x, top, p.name, { size: 21, weight: 600 }));
@@ -256,11 +258,11 @@ export function buildSVG(c) {
       { size: 14, weight: 700, fill, anchor: 'end' }));
   };
   bar(c.partner, c.theirBefore, c.theirAfter, c.theirGain, c.theirPerWeek, GAIN);
-  bar('You', c.myBefore, c.myAfter, c.myGain, c.myPerWeek, '#9AA0A8');
+  bar(c.myTeam, c.myBefore, c.myAfter, c.myGain, c.myPerWeek, '#9AA0A8');
   rule();
 
   // Positional depth on their roster
-  label('THEIR POSITIONAL DEPTH');
+  label(`${c.partner.toUpperCase()} POSITIONAL DEPTH`);
   for (const d of c.depth) {
     y += 26;
     out.push(text(L, y, d.position, { size: 14, weight: 600 }));
@@ -272,7 +274,7 @@ export function buildSVG(c) {
   // The slot upgrade, which is the most concrete number on the card.
   if (c.slotUpgrade) {
     const u = c.slotUpgrade;
-    label(`THEIR ${u.slot} SLOT`);
+    label(`${c.partner.toUpperCase()} ${u.slot} SLOT`);
     y += 28;
     out.push(text(L, y, `${u.out.name} ${u.out.perWeek}/wk`, { size: 15, fill: MID }));
     out.push(text(L + 210, y, '→', { size: 15, fill: DIM }));
@@ -283,7 +285,7 @@ export function buildSVG(c) {
   }
   y += 22;
   out.push(text(L, y, `value sent / received ${c.valueRatio}x   ·   `
-    + `${c.givingUpStarter ? 'they give up a starter' : 'they give up bench depth'}`
+    + `${c.givingUpStarter ? `${c.partner} give up a starter` : `${c.partner} give up bench depth`}`
     + `   ·   scored on league settings`, { size: 12, fill: DIM }));
   y += 28;
 
