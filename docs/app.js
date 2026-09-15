@@ -186,7 +186,8 @@ function actionHTML(a) {
     : dl && dl.locked ? '<span class="pillx locked">window closed</span>' : '';
   return `<div class="act">
     <div class="line">
-      <span class="rk ${a.rank <= 2 ? 'top' : ''}">${a.rank}</span>
+      <span class="rk ${a.priority === 1 ? 'urgent' : a.rank <= 2 ? 'top' : ''}"
+            title="${a.priority === 1 ? 'High priority' : ''}">${a.rank}</span>
       ${a.injury_driven ? '<span class="chip injury">Injury call</span>' : ''}
       <div class="actbody"><h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
