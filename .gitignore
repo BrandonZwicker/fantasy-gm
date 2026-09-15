@@ -11,4 +11,3 @@ data/*.db
 data/config.json
 
 .DS_Store
-.claude/
