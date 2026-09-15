@@ -31,9 +31,12 @@ body{margin:0;background:var(--paper);color:var(--ink);
 h1,h2,h3{margin:0}
 
 /* ---------- header ---------- */
-.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--paper) 88%,transparent);
-  backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid var(--line)}
-.top-in{max-width:1180px;margin:0 auto;padding:14px 24px;
+/* Named specifically: a bare `.top` collided with the rank-badge modifier,
+   which turned every high-rank badge into a second sticky element that rode
+   up into this bar on scroll. */
+.topbar{position:sticky;top:0;z-index:20;background:var(--paper);
+  border-bottom:1px solid var(--line)}
+.topbar-in{max-width:1180px;margin:0 auto;padding:14px 24px;
   display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
 .brand{font:400 25px/1.1 var(--display);letter-spacing:-.01em}
 .brand em{font-style:italic;color:var(--accent)}
@@ -109,7 +112,7 @@ main{max-width:1180px;margin:0 auto;padding:24px}
 .rk{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:grid;
   place-items:center;font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;
   background:var(--sunk);color:var(--ink-3);margin-top:1px}
-.rk.top{background:var(--ink);color:var(--paper)}
+.rk.lead{background:var(--ink);color:var(--paper)}
 /* One colour with one meaning: red is "this is the urgent one". */
 .rk.urgent{background:var(--urgent);color:#fff}
 .act:has(.rk.urgent) h4{color:var(--urgent)}
@@ -353,8 +356,8 @@ main.focused{max-width:840px}
 
   /* A 222px sticky header ate a quarter of the viewport. Let it scroll away;
      the tab bar is a short scroll back up. */
-  .top{position:static}
-  .top-in{padding:12px 14px;gap:7px 10px;align-items:center}
+  .topbar{position:static}
+  .topbar-in{padding:12px 14px;gap:7px 10px;align-items:center}
   .brand{font-size:21px;line-height:1.15}
   .grow{display:none}
   .acts{order:2;margin-left:auto}

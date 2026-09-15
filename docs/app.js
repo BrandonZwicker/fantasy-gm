@@ -187,7 +187,7 @@ function actionHTML(a) {
     : dl && dl.locked ? '<span class="pillx locked">window closed</span>' : '';
   return `<div class="act">
     <div class="line">
-      <span class="rk ${a.priority === 1 ? 'urgent' : a.rank <= 2 ? 'top' : ''}"
+      <span class="rk ${a.priority === 1 ? 'urgent' : a.rank <= 2 ? 'lead' : ''}"
             title="${a.priority === 1 ? 'High priority' : ''}">${a.rank}</span>
       ${a.injury_driven ? '<span class="chip injury">Injury call</span>' : ''}
       <div class="actbody"><h4>${esc(a.headline)}</h4>
@@ -500,8 +500,8 @@ function render(r, { isExample }) {
   const tab = TABS.some(t => t.id === PREFS.tab) ? PREFS.tab : 'overview';
 
   app().innerHTML = '';
-  app().appendChild(node(`<div class="top">
-    <div class="top-in">
+  app().appendChild(node(`<div class="topbar">
+    <div class="topbar-in">
       <div class="brand">${esc(r.league_name.trim())}</div>
       ${isExample ? '<span class="exbadge">example</span>' : ''}
       <div class="crumb">Week ${r.week} · <b>${esc(r.my_team)}</b> · ${esc(r.record)}</div>

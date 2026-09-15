@@ -617,6 +617,46 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
   speculative.sort((a, b) => b.impact - a.impact);
   speculative.forEach(a => { a.bucket = bucketOf(a.kind); });
 
+  // The lineup card is titled "Recommended lineup", so it has to show the
+  // lineup we actually recommend. Showing the theoretical optimum instead put
+  // a START HIM tag on a 0.1 point swap that every other part of the app had
+  // just decided was not worth making.
+  if (me && lineup) {
+    const recommendedSwaps = actions.filter(a => a.kind === 'start_sit' && a.payload?.bench);
+    const slots = rules.startingSlots;
+    const filled = slots.map((_, i) => {
+      const pid = currentStarters[i];
+      return pid && pid !== '0' ? pid : null;
+    });
+    for (const a of recommendedSwaps) {
+      const out = a.payload.bench;
+      const idx = filled.indexOf(out);
+      if (idx >= 0) filled[idx] = a.payload.player_id;
+    }
+    // A slot the current lineup left empty still gets the best legal option.
+    lineup.slots.forEach((s, i) => { if (!filled[i] && s.player_id) filled[i] = s.player_id; });
+
+    const started = new Set(filled.filter(Boolean));
+    const rosterWeek = {};
+    for (const pid of me.activePlayers()) rosterWeek[pid] = weekPts[pid] || 0;
+    lineup = {
+      slots: slots.map((slot, i) => ({
+        slot, player_id: filled[i],
+        points: r2(filled[i] ? (weekPts[filled[i]] || 0) : 0),
+        locked: filled[i] ? Boolean(lineup.slots[i]?.locked) : false,
+      })),
+      bench: Object.entries(rosterWeek)
+        .filter(([pid]) => !started.has(pid))
+        .map(([pid, pts]) => [pid, r2(pts)])
+        .sort((a, b) => b[1] - a[1]),
+      total: r2(slots.reduce((s, _, i) => s + (filled[i] ? (weekPts[filled[i]] || 0) : 0), 0)),
+      starterIds: () => filled.filter(Boolean),
+    };
+    // Keep the headline number honest against the lineup now on screen.
+    const currentTotal = r2(currentStarters.reduce((s, p) => s + (weekPts[p] || 0), 0));
+    lineupGain = r2(lineup.total - currentTotal);
+  }
+
   // One scale: points at stake, weighted by how soon the chance to act goes.
   actions.sort((a, b) => b.weight - a.weight);
   actions.forEach((a, i) => {
