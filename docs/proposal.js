@@ -1,13 +1,5 @@
-/* Trade analysis card.
- *
- * Deliberately not a pitch. It is the numbers behind a deal, laid out so they
- * can be read in one pass and argued from in your own words. Nothing in here
- * is written to persuade, because a canned script reads like a canned script
- * and the person on the other end can tell.
- *
- * Everything is computed from the same projections the rest of the app uses,
- * and both sides of the deal are shown, since only mutual-gain trades are
- * proposed in the first place.
+/* Trade analysis card. Numbers only, no pitch, since a canned script reads
+ * like one. Shows both rosters because only mutual-gain deals get proposed.
  */
 
 import { optimize, replacementLevels, vor } from './engine.js';

@@ -1,12 +1,5 @@
-/* Kickoff times, so we can say when a decision actually expires.
- *
- * A swap between two players closes at the EARLIER of their two kickoffs —
- * whoever plays first locks first, and after that the other one can't be moved
- * into his slot. Telling you "before Sunday kickoff" is useless when one of the
- * pair plays Thursday night.
- *
- * Inactives are published about 90 minutes before kickoff, so that is the last
- * useful moment to check a questionable player's status.
+/* Kickoff times. A swap closes at the earlier of the two players' kickoffs,
+ * since whoever plays first locks first. Inactives land ~90 min before.
  */
 
 const SCOREBOARD =

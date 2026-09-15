@@ -77,11 +77,9 @@ const REFERENCE_PPR = {
 // under it), so no residual can be attributed.
 const MIN_REFERENCE = 0.5;
 
-// Sleeper's headline projection is a separate model from its own components, so
-// trusting it is only worth doing where it is actually more accurate. Measured
-// against 2025 results (weeks 1-14), adopting it cuts kicker RMSE from 4.84 to
-// 4.70, but pushes quarterbacks from 7.53 to 8.00 — their QB number runs about
-// 2.2 points hot. So it is applied to kickers only.
+// Sleeper's headline projection is a separate model from its components.
+// Against 2025 results it cuts kicker RMSE 4.84 -> 4.70 but pushes QBs
+// 7.53 -> 8.00, so it's used for kickers only.
 const CALIBRATED_POSITIONS = new Set(['K']);
 
 // Standard deviation of weekly projection error, measured the same way. Used to
@@ -371,19 +369,9 @@ export function vor(projections, players, levels) {
 
 /* ---------------- players, built from projections ---------------- */
 
-/* Injury handling.
- *
- * We deliberately do NOT shade projections for players who might still play.
- * There is no way to calibrate such a multiplier from this data: Sleeper stamps
- * a player's *current* injury status onto every historical projection row, so
- * past rows cannot say what a "Questionable" tag was historically worth.
- *
- * Inventing a discount also breaks the number users check against the app: a
- * 25% haircut turned a 12.7-point projection into 9.5 with nothing on screen
- * explaining it, and that gap was enough to flip start/sit advice.
- *
- * The rule is now factual: a player who will not play is worth zero this week,
- * a player who might play is worth his projection, and the tag is shown.
+/* No projection haircut for players who might still play. Sleeper stamps the
+ * current injury status onto every historical row, so a multiplier can't be
+ * calibrated from it. Won't-play is zero, might-play is his projection.
  */
 const OUT_THIS_WEEK = new Set(['Out', 'IR', 'PUP', 'Sus', 'NA', 'DNR', 'Doubtful']);
 const LONG_TERM = new Set(['IR', 'PUP', 'NA', 'DNR', 'Sus']);

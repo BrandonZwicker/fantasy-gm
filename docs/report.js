@@ -21,18 +21,11 @@ const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
 // worthless once kickoff passes; a trade has weeks of runway.
 const URGENCY = { lineup: 3.2, waiver: 1.6, trade: 0.9, info: 0.35 };
 
-/* How big an edge has to be before a move is worth making.
- *
- * One fixed setting rather than a dial. Grounded in measured error: comparing
- * 2025 projections against results, weekly projections carry a standard
- * deviation near 6.8 points for skill players, so the gap between two players
- * has an SD near 9.6. A 1-point edge is right only 54% of the time; 2.5 points
- * gets to 60%. Below these floors a move is a coin flip dressed up as advice.
- *
- * Waiver and trade floors sit higher because those moves cost more than a
- * lineup tweak: an irreversible drop, finite FAAB or priority, a traded asset.
- * Warnings (a bye, an injured starter) are never filtered — certainties, not
- * edges.
+/* Minimum edge before a move is worth making.
+ * Weekly projections have an SD near 6.8, so the gap between two players has
+ * an SD near 9.6 and a 1-point edge is right 54% of the time. Waiver and trade
+ * floors sit higher since those cost a drop, FAAB or an asset. Byes and injured
+ * starters are never filtered, they're certainties rather than edges.
  */
 // Below this two players are the same player as far as the numbers go, and
 // there is nothing to discuss. Between here and the start/sit floor the
