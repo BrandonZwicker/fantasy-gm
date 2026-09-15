@@ -140,6 +140,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
 
   const actions = [];
   let lineup = null, lineupGain = 0, waivers = [], drops = [], trades = [];
+  let lineupLocked = false, movableCount = 0;
   let tradeNote = '', faabLeft = 0;
   const currentStarters = me ? [...me.starters] : [];
   const nextWaiver = rules.nextWaiverRun();
@@ -148,10 +149,59 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     const rosterWeek = {};
     for (const pid of me.activePlayers()) rosterWeek[pid] = weekPts[pid] || 0;
     const positions = state.positionsMap(rosterWeek);
-    lineup = optimize(rules, rosterWeek, positions);
+
+    // Once a player's game kicks off he is frozen where he is. A starter stays
+    // in his slot and a benched player stays benched, so the optimiser may only
+    // shuffle the players who can still move. Optimising the whole roster
+    // instead advertises points that cannot actually be collected.
+    const isLocked = (pid) => {
+      const tm = state.players.get(pid)?.team;
+      const g = tm ? state.kickoffs?.get(String(tm).toUpperCase()) : null;
+      return Boolean(g && g.started);
+    };
+
+    const allSlots = rules.startingSlots;
+    const pinned = new Map();          // slot index -> player already locked in
+    currentStarters.forEach((pid, i) => {
+      if (pid && pid !== '0' && i < allSlots.length && isLocked(pid)) pinned.set(i, pid);
+    });
+
+    const freeIdx = allSlots.map((_, i) => i).filter(i => !pinned.has(i));
+    const movable = {};
+    for (const pid of me.activePlayers()) {
+      if (!isLocked(pid)) movable[pid] = weekPts[pid] || 0;
+    }
+
+    // `optimize` only reads `startingSlots`, so a shim restricts it to the
+    // slots that are still open.
+    const sub = optimize({ startingSlots: freeIdx.map(i => allSlots[i]) },
+                         movable, positions);
+
+    const filled = new Array(allSlots.length).fill(null);
+    for (const [i, pid] of pinned) filled[i] = pid;
+    sub.slots.forEach((s, k) => { filled[freeIdx[k]] = s.player_id; });
+
+    const startersSet = new Set(filled.filter(Boolean));
+    lineup = {
+      slots: allSlots.map((slot, i) => ({
+        slot, player_id: filled[i],
+        points: r2(filled[i] ? (weekPts[filled[i]] || 0) : 0),
+        locked: filled[i] ? isLocked(filled[i]) : false,
+      })),
+      bench: Object.entries(rosterWeek)
+        .filter(([pid]) => !startersSet.has(pid))
+        .map(([pid, pts]) => [pid, r2(pts)])
+        .sort((a, b) => b[1] - a[1]),
+      total: r2(allSlots.reduce((s, _, i) => s + (filled[i] ? (weekPts[filled[i]] || 0) : 0), 0)),
+      starterIds: () => filled.filter(Boolean),
+    };
 
     const currentTotal = r2(currentStarters.reduce((s, p) => s + (weekPts[p] || 0), 0));
     lineupGain = r2(lineup.total - currentTotal);
+    // Nothing movable is left, so there is nothing to advertise.
+    if (!freeIdx.length) lineupGain = 0;
+    lineupLocked = !freeIdx.length;
+    movableCount = freeIdx.length;
 
     /* ---- start / sit ---- */
     const optimalIds = new Set(lineup.starterIds());
@@ -448,6 +498,9 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
   if (me && lineup) {
     for (const s of lineup.slots) {
       if (!s.player_id) continue;
+      // If his game has kicked off there is nothing to be done about it, so
+      // warning about the wire turning on him is just noise.
+      if (s.locked) continue;
       const sent = sentimentOf(state.sentiment, s.player_id);
       if (!sent || sent.direction >= 0 || sent.strength < 0.6) continue;
       const pl = state.players.get(s.player_id);
@@ -599,6 +652,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     record: me ? me.record : '-',
     settings_summary: rules.describe(),
     lineup, current_starters: currentStarters, lineup_gain: lineupGain,
+    lineup_locked: lineupLocked, movable_slots: movableCount,
     actions, waivers, drops, trades, changes, trade_note: tradeNote,
     faab_left: faabLeft, next_waiver: nextWaiver, deadlines,
     thresholds: floor,

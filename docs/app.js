@@ -199,8 +199,25 @@ function actionHTML(a) {
 
 const CARDS = {
   hero(r) {
-    const floor = r.risk_profile?.startSit ?? 0.1;
+    const floor = r.thresholds?.startSit ?? 2.5;
     const up = r.lineup_gain >= floor;
+    // Every game has kicked off, so the lineup is not "correct", it is settled.
+    if (r.lineup_locked) {
+      return `<div class="hero">
+        <div class="fig flat">🔒</div>
+        <div class="say">
+          <h2>Week ${r.week} is locked in</h2>
+          <p>Every one of your starters has already kicked off, so there is
+             nothing left to change. Waivers and trades below still matter for
+             next week.</p>
+        </div>
+        <div class="meta">
+          <div><div class="k">Record</div><div class="v">${esc(r.record)}</div></div>
+          <div><div class="k">Projected</div><div class="v">${r.lineup ? r.lineup.total.toFixed(1) : '—'}</div></div>
+          <div><div class="k">${r.uses_faab ? 'FAAB left' : 'Priority'}</div>
+            <div class="v">${r.uses_faab ? '$' + r.faab_left : '#' + (r.waiver_position || '—')}</div></div>
+        </div></div>`;
+    }
     // A gain that exists but sits under the threshold is noise, not an
     // opportunity — say so rather than dangling a number we won't act on.
     const marginal = !up && r.lineup_gain > 0.1;
@@ -211,8 +228,11 @@ const CARDS = {
                  : marginal ? 'Lineup is good enough'
                  : 'Your lineup is set correctly'}</h2>
         <p>${up ? `Fixing your week ${r.week} lineup is worth ${r.lineup_gain.toFixed(1)} more projected points.`
-             : marginal ? `The best change available is worth ${r.lineup_gain.toFixed(1)} points — inside the projection noise, so it isn't worth the move.`
-             : `Nothing to change for week ${r.week} — the optimal starters are already in.`}</p>
+             : marginal ? `The best change available is worth ${r.lineup_gain.toFixed(1)} points, which is inside the projection noise, so it is not worth the move.`
+             : `Nothing to change for week ${r.week}. The optimal starters are already in.`}${
+             r.movable_slots && r.movable_slots < (r.lineup?.slots.length || 0)
+               ? ` ${r.movable_slots} of ${r.lineup.slots.length} slots are still movable, the rest have kicked off.`
+               : ''}</p>
       </div>
       <div class="meta">
         <div><div class="k">Record</div><div class="v">${esc(r.record)}</div></div>
@@ -255,8 +275,8 @@ const CARDS = {
       return `${p.raw.toFixed(1)}<span class="adj">${adjusted.toFixed(1)} exp.</span>`;
     };
     const rows = (r.lineup?.slots || []).map(s => `
-      <tr><td><span class="slot">${esc(s.slot)}</span></td>
-        <td class="who">${who(s.player_id)}</td>
+      <tr class="${s.locked ? 'lockedrow' : ''}"><td><span class="slot">${esc(s.slot)}</span></td>
+        <td class="who">${who(s.player_id)}${s.locked ? '<span class="lockicon" title="game has kicked off">locked</span>' : ''}</td>
         <td class="n">${s.player_id ? shown(s.player_id, s.points) : s.points.toFixed(1)}</td></tr>`).join('');
     const bench = (r.lineup?.bench || []).slice(0, 10).map(([id, p]) => `
       <tr class="bench"><td><span class="slot bn">BN</span></td>
