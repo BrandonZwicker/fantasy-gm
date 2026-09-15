@@ -1,33 +1,31 @@
-/* Trade proposal package.
+/* Trade analysis card.
  *
- * A trade only happens if the other manager says yes, and nobody says yes to a
- * wall of numbers about how much it helps you. This builds the case from THEIR
- * side: what their lineup looks like before and after, which hole it fills, and
- * what the swap is actually worth to them.
+ * Deliberately not a pitch. It is the numbers behind a deal, laid out so they
+ * can be read in one pass and argued from in your own words. Nothing in here
+ * is written to persuade, because a canned script reads like a canned script
+ * and the person on the other end can tell.
  *
- * Everything in here is computed from the same projections the rest of the app
- * uses. It does not overstate, and it does not hide that the trade helps you
- * too, because only mutual-gain trades get proposed in the first place and
- * pretending otherwise is how you lose someone's trust for the rest of a season.
+ * Everything is computed from the same projections the rest of the app uses,
+ * and both sides of the deal are shown, since only mutual-gain trades are
+ * proposed in the first place.
  */
 
-import { SLOT_ELIGIBILITY, optimize } from './engine.js';
+import { optimize, replacementLevels, vor } from './engine.js';
 
 const r1 = (x) => Math.round(x * 10) / 10;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 
-/** Positional counts on a roster, and how many of each actually start. */
-function depth(state, team, ros) {
-  const counts = {};
+function positionCounts(state, team) {
+  const out = {};
   for (const pid of team.activePlayers()) {
     const p = state.players.get(pid);
-    if (p) counts[p.position] = (counts[p.position] || 0) + 1;
+    if (p) out[p.position] = (out[p.position] || 0) + 1;
   }
-  return counts;
+  return out;
 }
 
-function startersByPos(rules, lineup, state) {
+function startCounts(state, lineup) {
   const out = {};
   for (const s of lineup.slots) {
     if (!s.player_id) continue;
@@ -37,186 +35,264 @@ function startersByPos(rules, lineup, state) {
   return out;
 }
 
-/**
- * Work out what the deal does to the partner's roster.
- * `trade.send` are the players they would receive.
- */
+const swap = (pts, out, inn, src) => {
+  const n = { ...pts };
+  for (const p of out) delete n[p];
+  for (const p of inn) n[p] = src[p] || 0;
+  return n;
+};
+
+/** Both rosters, before and after, in numbers. `trade.send` is what they receive. */
 export function buildCase(state, trade, ros) {
   const rules = state.rules;
   const them = state.teams[trade.partner_roster_id];
   const me = state.me;
   if (!them || !me) return null;
 
+  const weeks = Math.max(1, state.weeksRemaining);
+
+  // Rank every player within his own position, which is the unit fantasy
+  // managers actually think in. "RB8" lands harder than "154 projected points".
+  const ranks = {};
+  const byPos = {};
+  for (const pid in ros) {
+    const p = state.players.get(pid);
+    if (!p || !p.position || ros[pid] <= 0) continue;
+    (byPos[p.position] ||= []).push([pid, ros[pid]]);
+  }
+  for (const pos in byPos) {
+    byPos[pos].sort((a, b) => b[1] - a[1]);
+    byPos[pos].forEach(([pid], i) => { ranks[pid] = i + 1; });
+  }
+
+  // Value over replacement: what he is worth against the freely available
+  // alternative at his position, under this league's scoring.
+  const levels = replacementLevels(rules, ros, state.players);
+  const vors = vor(ros, state.players, levels);
+
+  const detail = (pid) => {
+    const p = state.players.get(pid);
+    const total = ros[pid] || 0;
+    return { pid, name: p?.name || pid, position: p?.position || '?',
+             team: p?.team || '', ros: r1(total),
+             perWeek: r1(total / weeks),
+             rank: ranks[pid] ? `${p?.position || ''}${ranks[pid]}` : null,
+             vor: r1(vors[pid] || 0) };
+  };
+
+  // Their side.
   const theirPts = state.rosterProjection(them, ros);
   const theirPos = state.positionsMap(theirPts);
-  const before = optimize(rules, theirPts, theirPos);
-
-  const after = { ...theirPts };
-  for (const pid of trade.receive) delete after[pid];      // they give these up
-  for (const pid of trade.send) after[pid] = ros[pid] || 0; // they receive these
-  const afterPos = { ...theirPos };
+  const theirBefore = optimize(rules, theirPts, theirPos);
+  const theirAfterPts = swap(theirPts, trade.receive, trade.send, ros);
+  const theirAfterPos = { ...theirPos };
   for (const pid of trade.send) {
     const p = state.players.get(pid);
-    if (p) afterPos[pid] = p.position;
+    if (p) theirAfterPos[pid] = p.position;
   }
-  const afterLineup = optimize(rules, after, afterPos);
+  const theirAfter = optimize(rules, theirAfterPts, theirAfterPos);
 
-  // Where the incoming players land in their lineup.
-  const lands = trade.send.map(pid => {
-    const slot = afterLineup.slots.find(s => s.player_id === pid);
+  // Your side.
+  const myPts = state.rosterProjection(me, ros);
+  const myPos = state.positionsMap(myPts);
+  const myBefore = optimize(rules, myPts, myPos);
+  const myAfterPts = swap(myPts, trade.send, trade.receive, ros);
+  const myAfterPos = { ...myPos };
+  for (const pid of trade.receive) {
     const p = state.players.get(pid);
-    return { pid, name: p?.name || pid, position: p?.position || '?',
-             slot: slot ? slot.slot : null, points: r1(ros[pid] || 0) };
+    if (p) myAfterPos[pid] = p.position;
+  }
+  const myAfter = optimize(rules, myAfterPts, myAfterPos);
+
+  // Where the pieces land, and who loses a slot as a result.
+  const beforeIds = new Set(theirBefore.starterIds());
+  const afterIds = new Set(theirAfter.starterIds());
+  const outgoing = new Set(trade.receive);
+  const lands = trade.send.map(pid => {
+    const s = theirAfter.slots.find(x => x.player_id === pid);
+    return { ...detail(pid), slot: s ? s.slot : null };
   });
 
-  // Who they lose out of their lineup. The players leaving in the trade are
-  // obviously gone, so they are not "displaced" by anything.
-  const beforeIds = new Set(before.starterIds());
-  const afterIds = new Set(afterLineup.starterIds());
-  const outgoing = new Set(trade.receive);
-  const displaced = [...beforeIds]
-    .filter(x => !afterIds.has(x) && !outgoing.has(x))
-    .map(pid => state.players.get(pid)?.name).filter(Boolean);
+  const displacedIds = [...beforeIds].filter(x => !afterIds.has(x) && !outgoing.has(x));
+  const displaced = displacedIds.map(pid => detail(pid).name);
 
-  const theirDepth = depth(state, them, ros);
-  const theirStarts = startersByPos(rules, before, state);
+  // The upgrade that actually matters to them: not the roster total, but who
+  // stops starting and by how much, per week.
+  const slotUpgrade = (() => {
+    const inc = lands.find(l => l.slot);
+    if (!inc) return null;
+    const outPlayer = displacedIds.length ? detail(displacedIds[0]) : null;
+    if (!outPlayer) return null;
+    return { slot: inc.slot, in: inc, out: outPlayer,
+             perWeek: r1(inc.perWeek - outPlayer.perWeek) };
+  })();
 
-  // Whether each piece they give up is genuinely spare. Counting the position
-  // is not enough: a team can be six deep at receiver and still be handing over
-  // the one who starts every week. Calling that man "depth you can't use" is
-  // both false and the fastest way to have a proposal ignored.
-  const surplus = trade.receive.map(pid => {
+  // Positional depth on their roster, before and after.
+  const have = positionCounts(state, them);
+  const starts = startCounts(state, theirBefore);
+  const delta = { ...have };
+  for (const pid of trade.receive) {
     const p = state.players.get(pid);
-    if (!p) return null;
-    const have = theirDepth[p.position] || 0;
-    const start = theirStarts[p.position] || 0;
-    return {
-      name: p.name, position: p.position, have, start,
-      startsForThem: beforeIds.has(pid),
-      spare: Math.max(0, have - start),
-    };
-  }).filter(Boolean);
+    if (p) delta[p.position] = (delta[p.position] || 0) - 1;
+  }
+  for (const pid of trade.send) {
+    const p = state.players.get(pid);
+    if (p) delta[p.position] = (delta[p.position] || 0) + 1;
+  }
+  const touched = new Set([...trade.send, ...trade.receive]
+    .map(pid => state.players.get(pid)?.position).filter(Boolean));
+  const depth = [...touched].map(pos => ({
+    position: pos, before: have[pos] || 0, after: delta[pos] || 0,
+    starts: starts[pos] || 0,
+  }));
 
   return {
     partner: them.label,
-    partnerRecord: them.record,
     league: rules.name.trim(),
-    theyGet: trade.send.map(p => state.players.get(p)?.name || p),
-    theyGive: trade.receive.map(p => state.players.get(p)?.name || p),
-    theirBefore: r1(before.total),
-    theirAfter: r1(afterLineup.total),
-    theirGain: r1(afterLineup.total - before.total),
-    myGain: r1(trade.my_gain),
-    lands, displaced, surplus,
+    week: state.currentWeek,
+    theyGet: trade.send.map(detail),
+    theyGive: trade.receive.map(detail),
+    weeks,
+    theirBefore: r1(theirBefore.total), theirAfter: r1(theirAfter.total),
+    theirGain: r1(theirAfter.total - theirBefore.total),
+    theirPerWeek: r1((theirAfter.total - theirBefore.total) / weeks),
+    myBefore: r1(myBefore.total), myAfter: r1(myAfter.total),
+    myGain: r1(myAfter.total - myBefore.total),
+    myPerWeek: r1((myAfter.total - myBefore.total) / weeks),
+    slotUpgrade,
+    valueRatio: trade.value_ratio,
     acceptance: trade.acceptance,
+    lands, displaced, depth,
+    // Whether each piece they send is actually in their starting lineup.
+    givingUpStarter: trade.receive.some(pid => beforeIds.has(pid)),
   };
 }
 
-/** A message they can paste straight into a league chat. */
-export function buildMessage(c, myName) {
-  const get = c.theyGet.join(' and ');
-  const give = c.theyGive.join(' and ');
-  const lines = [];
+/** Short factual points. Talking material, not a script. */
+export function buildKeyPoints(c) {
+  const pts = [];
+  const get = c.theyGet.map(p => p.name).join(' + ');
+  const give = c.theyGive.map(p => p.name).join(' + ');
+  const tag = (p) => `${p.name} is ${p.rank || p.position} rest of season, ${p.perWeek}/wk, ${p.vor >= 0 ? '+' : ''}${p.vor} over replacement`;
 
-  lines.push(`hey, trade idea for you.`);
-  lines.push('');
-  lines.push(`you get ${get}, i get ${give}.`);
-  lines.push('');
+  pts.push(`${c.partner} gets ${get}, gives ${give}`);
+  for (const p of c.theyGet) pts.push(tag(p));
+  for (const p of c.theyGive) pts.push(tag(p));
 
-  // Only make the "spare depth" argument about a player who is actually spare.
-  const benchPiece = c.surplus.find(s => !s.startsForThem && s.spare > 0);
-  const starterPiece = c.surplus.find(s => s.startsForThem);
-  if (benchPiece) {
-    lines.push(`why it works on your side. you're ${benchPiece.have} deep at `
-      + `${benchPiece.position} and only start ${benchPiece.start}, so ${benchPiece.name} `
-      + `is depth you can't get on the field. you'd be trading from the one spot `
-      + `where you have more than you can use.`);
-  } else if (starterPiece) {
-    lines.push(`why it works on your side. i know ${starterPiece.name} starts for you, `
-      + `so this isn't me asking for a spare part. the case is that you're `
-      + `${starterPiece.have} deep at ${starterPiece.position} and start `
-      + `${starterPiece.start}, so someone steps into that slot straight away, `
-      + `and what you get back is worth more than the drop-off.`);
-  } else {
-    lines.push(`why it works on your side. it's a straight upgrade to your starting `
-      + `lineup rather than a depth move.`);
+  if (c.slotUpgrade) {
+    const u = c.slotUpgrade;
+    pts.push(`Their ${u.slot} goes from ${u.out.name} at ${u.out.perWeek}/wk to `
+      + `${u.in.name} at ${u.in.perWeek}/wk, ${u.perWeek >= 0 ? '+' : ''}${u.perWeek} a week in that slot`);
   }
-  lines.push('');
+  pts.push(`Their starting lineup ${c.theirGain >= 0 ? '+' : ''}${c.theirGain} over ${c.weeks} weeks, `
+    + `${c.theirPerWeek >= 0 ? '+' : ''}${c.theirPerWeek} a week`);
+  pts.push(`Yours ${c.myGain >= 0 ? '+' : ''}${c.myGain}, ${c.myPerWeek >= 0 ? '+' : ''}${c.myPerWeek} a week`);
 
-  const landed = c.lands.filter(l => l.slot);
-  if (landed.length) {
-    const l = landed[0];
-    lines.push(`${l.name} goes straight into your ${l.slot}`
-      + (c.displaced.length ? ` over ${c.displaced[0]}` : '')
-      + `, and your projected starting lineup goes from ${c.theirBefore} to `
-      + `${c.theirAfter} between now and playoffs. that's about `
-      + `${Math.abs(c.theirGain)} points.`);
-    lines.push('');
+  for (const d of c.depth) {
+    pts.push(`Their ${d.position} depth ${d.before} → ${d.after}, they start ${d.starts}`);
   }
-
-  lines.push(`and yes it helps me too, i'm short at that spot, which is the only `
-    + `reason i'm asking. figured that's better than pretending it's charity.`);
-  lines.push('');
-  lines.push(`numbers are run on our league's actual scoring, not generic ppr. `
-    + `happy to send the breakdown if you want it.`);
-  lines.push('');
-  lines.push(`let me know.`);
-  return lines.join('\n');
+  pts.push(c.givingUpStarter
+    ? `${give} currently starts for them, so this is not spare depth`
+    : `${give} is not in their starting lineup`);
+  pts.push(`Value sent / received ${c.valueRatio}x${c.valueRatio >= 0.9 && c.valueRatio <= 1.1 ? ', roughly even' : ''}`);
+  pts.push(`Scored on ${c.league} settings, not generic PPR`);
+  return pts;
 }
 
-/** A shareable card. Framed in the second person, because they are the reader. */
+/* ---------------- the card ---------------- */
+
+const F = 'Inter,Segoe UI,-apple-system,sans-serif';
+const INK = '#17181D', DIM = '#8B8F9A', MID = '#4A4D57';
+const GAIN = '#0B8F63', LINE = '#E7E3DC';
+
 export function buildSVG(c) {
-  const W = 1000, H = 560;
-  const maxGain = Math.max(Math.abs(c.theirGain), Math.abs(c.myGain), 1);
-  const barW = (v) => Math.max(6, (Math.abs(v) / maxGain) * 300);
-  const col = (arr) => arr.map((n, i) =>
-    `<text x="0" y="${i * 34}" font-family="Inter,Segoe UI,sans-serif" font-size="25"
-       font-weight="600" fill="#17181D">${esc(n)}</text>`).join('');
+  const W = 980, L = 56, R = W - 56;
+  // Laid out with a running cursor rather than hand-placed coordinates, which
+  // is how the lineup bars ended up overlapping the depth rows.
+  let y = 0;
+  const out = [];
+  const text = (x, yy, s, o = {}) =>
+    `<text x="${x}" y="${yy}" font-family="${F}" font-size="${o.size || 15}"` +
+    ` font-weight="${o.weight || 400}" fill="${o.fill || INK}"` +
+    (o.anchor ? ` text-anchor="${o.anchor}"` : '') +
+    (o.spacing ? ` letter-spacing="${o.spacing}"` : '') +
+    `>${esc(s)}</text>`;
+  const rule = () => { y += 18; out.push(`<line x1="${L}" y1="${y}" x2="${R}" y2="${y}" stroke="${LINE}"/>`); y += 6; };
+  const label = (s) => { y += 26; out.push(text(L, y, s, { size: 11, weight: 700, spacing: 1.5, fill: DIM })); };
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <rect width="${W}" height="${H}" fill="#F6F4F0"/>
-  <rect x="32" y="32" width="${W - 64}" height="${H - 64}" rx="18" fill="#FFFFFF"/>
+  // Header
+  y = 48;
+  out.push(text(L, y, c.partner, { size: 20, weight: 700 }));
+  out.push(text(R, y, `${c.league} · week ${c.week}`, { size: 13, fill: DIM, anchor: 'end' }));
+  rule();
 
-  <text x="68" y="92" font-family="Georgia,serif" font-size="30" fill="#17181D">Trade proposal</text>
-  <text x="68" y="120" font-family="Inter,Segoe UI,sans-serif" font-size="15"
-        fill="#8B8F9A">${esc(c.league)} · for ${esc(c.partner)}</text>
+  // Who moves
+  const colTop = y + 26;
+  out.push(text(L, colTop, 'THEY RECEIVE', { size: 11, weight: 700, spacing: 1.5, fill: DIM }));
+  out.push(text(520, colTop, 'THEY SEND', { size: 11, weight: 700, spacing: 1.5, fill: DIM }));
+  const block = (x, list) => list.forEach((p, i) => {
+    const top = colTop + 34 + i * 74;
+    out.push(text(x, top, p.name, { size: 21, weight: 600 }));
+    out.push(text(x, top + 21, `${p.rank || p.position} · ${p.team}`, { size: 14, weight: 600, fill: MID }));
+    out.push(text(x, top + 41, `${p.perWeek}/wk · ${p.ros} total · ${p.vor >= 0 ? '+' : ''}${p.vor} vs replacement`,
+      { size: 12.5, fill: DIM }));
+  });
+  block(L, c.theyGet);
+  block(520, c.theyGive);
+  y = colTop + 34 + Math.max(c.theyGet.length, c.theyGive.length) * 74 - 26;
+  rule();
 
-  <line x1="68" y1="146" x2="${W - 68}" y2="146" stroke="#E7E3DC" stroke-width="1"/>
+  // Lineup effect
+  label('PROJECTED STARTING LINEUP, REST OF SEASON');
+  const barMax = Math.max(Math.abs(c.theirGain), Math.abs(c.myGain), 1);
+  const bar = (name, before, after, gain, perWeek, fill) => {
+    y += 30;
+    const w = Math.max(4, (Math.abs(gain) / barMax) * 150);
+    out.push(text(L, y, name, { size: 14, weight: 600, fill: MID }));
+    out.push(text(200, y, `${before} → ${after}`, { size: 14, fill: MID }));
+    out.push(`<rect x="340" y="${y - 14}" width="${w}" height="18" rx="5" fill="${fill}"/>`);
+    out.push(text(348 + w, y, `${gain >= 0 ? '+' : ''}${gain}`, { size: 14, weight: 700, fill }));
+    out.push(text(R, y, `${perWeek >= 0 ? '+' : ''}${perWeek} / wk`,
+      { size: 14, weight: 700, fill, anchor: 'end' }));
+  };
+  bar(c.partner, c.theirBefore, c.theirAfter, c.theirGain, c.theirPerWeek, GAIN);
+  bar('You', c.myBefore, c.myAfter, c.myGain, c.myPerWeek, '#9AA0A8');
+  rule();
 
-  <text x="68" y="186" font-family="Inter,Segoe UI,sans-serif" font-size="12"
-        font-weight="700" letter-spacing="1.6" fill="#0B8F63">YOU GET</text>
-  <g transform="translate(68,222)">${col(c.theyGet)}</g>
+  // Positional depth on their roster
+  label('THEIR POSITIONAL DEPTH');
+  for (const d of c.depth) {
+    y += 26;
+    out.push(text(L, y, d.position, { size: 14, weight: 600 }));
+    out.push(text(120, y, `${d.before} → ${d.after} on roster`, { size: 14, fill: MID }));
+    out.push(text(320, y, `${d.starts} start`, { size: 14, fill: DIM }));
+  }
+  rule();
 
-  <text x="540" y="186" font-family="Inter,Segoe UI,sans-serif" font-size="12"
-        font-weight="700" letter-spacing="1.6" fill="#B4721A">YOU GIVE</text>
-  <g transform="translate(540,222)">${col(c.theyGive)}</g>
+  // The slot upgrade, which is the most concrete number on the card.
+  if (c.slotUpgrade) {
+    const u = c.slotUpgrade;
+    label(`THEIR ${u.slot} SLOT`);
+    y += 28;
+    out.push(text(L, y, `${u.out.name} ${u.out.perWeek}/wk`, { size: 15, fill: MID }));
+    out.push(text(L + 210, y, '→', { size: 15, fill: DIM }));
+    out.push(text(L + 240, y, `${u.in.name} ${u.in.perWeek}/wk`, { size: 15, weight: 600 }));
+    out.push(text(R, y, `${u.perWeek >= 0 ? '+' : ''}${u.perWeek} / wk in that slot`,
+      { size: 15, weight: 700, fill: GAIN, anchor: 'end' }));
+    rule();
+  }
+  y += 22;
+  out.push(text(L, y, `value sent / received ${c.valueRatio}x   ·   `
+    + `${c.givingUpStarter ? 'they give up a starter' : 'they give up bench depth'}`
+    + `   ·   scored on league settings`, { size: 12, fill: DIM }));
+  y += 28;
 
-  <text x="470" y="232" font-family="Inter,Segoe UI,sans-serif" font-size="26" fill="#8B8F9A">→</text>
-
-  <line x1="68" y1="330" x2="${W - 68}" y2="330" stroke="#E7E3DC" stroke-width="1"/>
-
-  <text x="68" y="368" font-family="Inter,Segoe UI,sans-serif" font-size="12"
-        font-weight="700" letter-spacing="1.6" fill="#8B8F9A">PROJECTED STARTING LINEUP, REST OF SEASON</text>
-
-  <text x="68" y="410" font-family="Inter,Segoe UI,sans-serif" font-size="16"
-        font-weight="600" fill="#17181D">Your lineup</text>
-  <rect x="230" y="394" width="${barW(c.theirGain)}" height="22" rx="6" fill="#0B8F63"/>
-  <text x="${238 + barW(c.theirGain)}" y="411" font-family="Inter,Segoe UI,sans-serif"
-        font-size="16" font-weight="700" fill="#0B8F63">+${Math.abs(c.theirGain)}</text>
-
-  <text x="68" y="456" font-family="Inter,Segoe UI,sans-serif" font-size="16"
-        font-weight="600" fill="#4A4D57">My lineup</text>
-  <rect x="230" y="440" width="${barW(c.myGain)}" height="22" rx="6" fill="#B6B8BF"/>
-  <text x="${238 + barW(c.myGain)}" y="457" font-family="Inter,Segoe UI,sans-serif"
-        font-size="16" font-weight="700" fill="#8B8F9A">+${Math.abs(c.myGain)}</text>
-
-  <text x="68" y="508" font-family="Inter,Segoe UI,sans-serif" font-size="13" fill="#8B8F9A">
-    ${esc(c.theyGet[0] || '')} slots into your ${esc((c.lands.find(l => l.slot) || {}).slot || 'lineup')}. Scored on this league's own settings, not generic PPR.
-  </text>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}">
+<rect width="${W}" height="${y}" fill="#FFFFFF"/>
+${out.join('\n')}
 </svg>`;
 }
 
-/** Rasterise for pasting into a chat that will not take an SVG. */
 export function svgToPng(svg, scale = 2) {
   return new Promise((resolve, reject) => {
     const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
@@ -226,6 +302,8 @@ export function svgToPng(svg, scale = 2) {
       const cv = document.createElement('canvas');
       cv.width = img.width * scale; cv.height = img.height * scale;
       const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, cv.width, cv.height);
       ctx.scale(scale, scale);
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);

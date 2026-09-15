@@ -363,10 +363,14 @@ const CARDS = {
           <div class="pkg-in">
             <div class="pkg-card" id="pkgcard-${i}"></div>
             <div class="pkg-actions">
-              <button class="btn" data-copy="${i}">Copy the message</button>
-              <button class="btn" data-png="${i}">Download the graphic</button>
+              <button class="btn" data-copyimg="${i}">Copy image</button>
+              <button class="btn" data-png="${i}">Download image</button>
             </div>
-            <pre class="pkg-msg" id="pkgmsg-${i}">${esc(t.proposal.message)}</pre>
+            <div class="pkg-pts">
+              <div class="pkg-pts-h">Key points</div>
+              <ul>${t.proposal.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+              <button class="btn quiet" data-copypts="${i}">Copy these points</button>
+            </div>
           </div></details>` : ''}
         </div>`;
     }).join('') : `<div class="notice">${esc(r.trade_note || 'No mutually beneficial trades right now.')}</div>`;
@@ -558,20 +562,31 @@ function render(r, { isExample }) {
       }
     });
   });
-  document.querySelectorAll('[data-copy]').forEach(b => {
+  document.querySelectorAll('[data-copypts]').forEach(b => {
     b.onclick = async () => {
-      const msg = r.trades[b.dataset.copy]?.proposal?.message || '';
+      const pts = r.trades[b.dataset.copypts]?.proposal?.points || [];
+      const text = pts.map(p => `- ${p}`).join('\n');
       try {
-        await navigator.clipboard.writeText(msg);
-        hint('Message copied, paste it into your league chat');
-      } catch {
-        // Clipboard is blocked in some contexts, so fall back to selecting it.
-        const pre = document.getElementById(`pkgmsg-${b.dataset.copy}`);
-        if (pre) {
-          const sel = window.getSelection(); const rng = document.createRange();
-          rng.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rng);
-          hint('Select-all is ready, press copy');
+        await navigator.clipboard.writeText(text);
+        hint('Key points copied');
+      } catch { hint('Clipboard is blocked here, select the list instead'); }
+    };
+  });
+  document.querySelectorAll('[data-copyimg]').forEach(b => {
+    b.onclick = async () => {
+      const deal = r.trades[b.dataset.copyimg];
+      if (!deal?.proposal) return;
+      try {
+        const blob = await svgToPng(buildSVG(deal.proposal));
+        // Writing an image needs ClipboardItem, which not every browser exposes.
+        if (navigator.clipboard?.write && window.ClipboardItem) {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          hint('Image copied, paste it straight into a message');
+        } else {
+          throw new Error('no image clipboard');
         }
+      } catch {
+        hint('This browser will not copy images, use Download instead');
       }
     };
   });
