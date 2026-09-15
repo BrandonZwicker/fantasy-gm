@@ -12,19 +12,35 @@
 const SCOREBOARD =
   'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
 
+// ESPN's default scoreboard returns whatever week it considers current, which
+// is not necessarily the week we are projecting. Sleeper rolls its week over on
+// the Tuesday, so on a Tuesday ESPN still serves last week's finished games
+// while we are already scoring the week ahead. Reading those as "locked" froze
+// an entire upcoming lineup. The week is therefore always requested explicitly.
+const urlFor = (season, week) =>
+  (season && week)
+    ? `${SCOREBOARD}?seasontype=2&week=${week}&dates=${season}`
+    : SCOREBOARD;
+
 export const INACTIVES_LEAD_MIN = 90;
 
 /** Map of team abbreviation -> { kickoff: Date, opponent, started, final }. */
-export async function fetchKickoffs() {
+export async function fetchKickoffs(season, week) {
   const out = new Map();
   let data;
   try {
-    const r = await fetch(SCOREBOARD);
+    const r = await fetch(urlFor(season, week));
     if (!r.ok) return out;
     data = await r.json();
   } catch {
     return out;     // schedule is an enhancement, never block on it
   }
+
+  // If ESPN hands back a different week than we asked for, we cannot tell which
+  // games these are. Returning nothing leaves every player movable, which is the
+  // safe direction to be wrong in: it costs a stale suggestion, not a lost week.
+  const got = data.week?.number;
+  if (week && got && Number(got) !== Number(week)) return out;
   for (const ev of data.events || []) {
     const comp = (ev.competitions || [])[0];
     if (!comp) continue;

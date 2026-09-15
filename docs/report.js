@@ -86,7 +86,7 @@ export async function buildReport(leagueId, userId, { anonymize = false,
     // News and schedule are enhancements: if ESPN is unreachable we fall back
     // to the Sleeper designation rather than failing the whole report.
     fetchInjuryReport().catch(() => new Map()),
-    fetchKickoffs().catch(() => new Map()),
+    fetchKickoffs(state.season, week).catch(() => new Map()),
     fetchSentiment().catch(() => new Map()),
   ]);
   state.players.attachInjuries(injuries);
