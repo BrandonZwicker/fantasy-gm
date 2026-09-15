@@ -12,7 +12,7 @@ import {
 import { fetchInjuryReport } from './injuries.js';
 import { INACTIVES_LEAD_MIN, fetchKickoffs, swapDeadline } from './schedule.js';
 import { breakTie, fetchSentiment, sentimentOf } from './sentiment.js';
-import { buildCase, buildMessage } from './proposal.js';
+import { buildCase, buildKeyPoints } from './proposal.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
@@ -451,7 +451,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     for (const tr of trades) {
       try {
         const c = buildCase(state, tr, ros);
-        if (c) tr.proposal = { ...c, message: buildMessage(c) };
+        if (c) tr.proposal = { ...c, points: buildKeyPoints(c) };
       } catch { /* a missing partner should not sink the report */ }
     }
 
