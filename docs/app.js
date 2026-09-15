@@ -157,10 +157,10 @@ function actionHTML(a) {
   // edge — it can flip on news — so it says so and points at the re-check.
   const whyLabel = a.injury_driven
     ? (dl && !dl.locked
-        ? `Why — and re-check by ${new Date(dl.check_by).toLocaleString(undefined,
+        ? `More info, re-check by ${new Date(dl.check_by).toLocaleString(undefined,
             { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`
-        : 'Why — this one hinges on health')
-    : 'Why this move?';
+        : 'More info, this one hinges on health')
+    : 'More info';
   const whyHTML = why.length ? `
     <details class="${a.injury_driven ? 'health' : ''}"><summary>${esc(whyLabel)}</summary>
       <div class="rz">${why.map(s => `<div class="st"><h5>${esc(s.h)}</h5>
