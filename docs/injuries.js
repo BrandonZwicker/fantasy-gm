@@ -1,16 +1,7 @@
-/* Injury intelligence.
- *
- * A "Questionable" tag covers everything from "full practice, expected to play"
- * to "ACL surgery". Sleeper only gives the tag and a body part, which is not
- * enough to decide whether to start someone — and inventing a flat discount for
- * the tag was worse than useless, because it silently moved projections away
- * from the number the app shows.
- *
- * ESPN publishes a per-team injury report with a narrative note, and it sends
- * `access-control-allow-origin: *`, so the browser can read it directly. The
- * notes are formulaic enough to classify: practice participation and a handful
- * of stock phrases carry most of the signal. We turn that into a probability
- * the player suits up, and we always show the note so the call stays with you.
+/* Play probability from ESPN's injury report.
+ * A Questionable tag spans "full practice" to "ACL surgery", so the tag alone
+ * can't decide a lineup. ESPN allows cross-origin reads and its notes are
+ * formulaic, so practice participation carries most of the signal.
  */
 
 const ESPN_INJURIES =

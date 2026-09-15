@@ -1,18 +1,6 @@
-/* What the rest of the league is doing with a player.
- *
- * Projections update on a lag. Roster moves do not. When 84,000 managers drop a
- * player inside 24 hours while his projection still reads 12 points, the crowd
- * has absorbed something the projection has not, and that gap is information.
- *
- * This is deliberately only used where the projection cannot decide on its own.
- * A projected edge of half a point is inside the error band, so treating it as
- * evidence is false precision. In that situation the honest move is to stop
- * pretending the number decides it, and look at what everyone else is doing.
- *
- * Caveats worth keeping in view. Counts are raw, not per-roster rates, so a
- * widely held player shows bigger absolute numbers. Adds are capped by
- * availability, since a rostered player cannot be added. Drops are the cleaner
- * signal for someone already on your team.
+/* League-wide adds and drops, used only to break near-ties.
+ * Projections lag, roster moves don't. Counts are raw rather than per-roster
+ * rates, and adds are capped by availability, so drops are the cleaner signal.
  */
 
 const BASE = 'https://api.sleeper.app/v1/players/nfl/trending';
