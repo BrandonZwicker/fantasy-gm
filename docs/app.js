@@ -318,6 +318,37 @@ const CARDS = {
       <div class="in">${body}</div></div>`;
   },
 
+  closeCalls(r) {
+    const list = r.close_calls || [];
+    if (!list.length) return '';
+    return `<div class="card"><header><h3>Too close to call</h3>
+      <span class="note">the projection cannot separate these</span></header>
+      <div class="in">
+        <p class="spec-lede">The gap here is smaller than the error on the
+          projection, so the number is not really evidence. Where something
+          outside the projection points one way, it is below. Where nothing
+          does, leaving it alone is the sane answer.</p>
+        ${list.map(c => `<div class="tie">
+          <div class="tie-row">
+            <div class="tie-side"><b>${esc(c.in_name)}</b><span>${c.in_points.toFixed(1)}</span></div>
+            <div class="tie-vs">vs</div>
+            <div class="tie-side"><b>${esc(c.out_name)}</b><span>${c.out_points.toFixed(1)}</span></div>
+            <div class="tie-slot">${esc(c.slot || '')}</div>
+          </div>
+          <div class="tie-verdict ${c.verdict === 'lean to the swap' ? 'lean' : 'stay'}">
+            ${c.verdict === 'lean to the swap'
+              ? `Lean to ${esc(c.in_name)}` : 'Leave it as it is'}
+            <em>gap of ${c.gap.toFixed(1)}, inside the margin of error</em>
+          </div>
+          ${(c.tiebreak?.reasons || []).length
+            ? `<ul class="tie-why">${c.tiebreak.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`
+            : `<p class="tie-why-none">Nothing outside the projection separates
+                 them, so this is preference. Churn costs you nothing here, but
+                 it gains you nothing either.</p>`}
+        </div>`).join('')}
+      </div></div>`;
+  },
+
   speculative(r) {
     const list = r.speculative || [];
     if (!list.length) return '';
@@ -389,7 +420,7 @@ const TABS = [
 
 function tabBody(r, tab) {
   switch (tab) {
-    case 'lineup':   return CARDS.lineup(r) + CARDS.drops(r);
+    case 'lineup':   return CARDS.lineup(r) + CARDS.closeCalls(r) + CARDS.drops(r);
     case 'waivers':  return CARDS.waivers(r) + CARDS.drops(r);
     case 'trades':   return CARDS.trades(r) + CARDS.speculative(r);
     case 'activity': return CARDS.activity(r);
@@ -429,7 +460,7 @@ function render(r, { isExample }) {
   const body = mode === 'all'
     ? `<main>${CARDS.hero(r)}
         <div class="cols">
-          <div>${CARDS.actions(r)}${CARDS.lineup(r)}${CARDS.trades(r)}${CARDS.speculative(r)}</div>
+          <div>${CARDS.actions(r)}${CARDS.closeCalls(r)}${CARDS.lineup(r)}${CARDS.trades(r)}${CARDS.speculative(r)}</div>
           <div>${CARDS.waivers(r)}${CARDS.drops(r)}${CARDS.activity(r)}${CARDS.rules(r)}${CARDS.reminders(r)}</div>
         </div></main>`
     : `<main class="focused">${tabBody(r, tab)}</main>`;
