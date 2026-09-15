@@ -262,7 +262,7 @@ const CARDS = {
     const body = r.actions.length ? groupsHTML + held
       : `<div class="allclear"><span class="big">All clear</span>
          No moves worth making right now. Check back after the next games.</div>${held}`;
-    return `<div class="card"><header><h3>What to do</h3>
+    return `<div class="card"><header><h3>The decision room</h3>
       <span class="note">${r.actions.length} item${r.actions.length === 1 ? '' : 's'} · numbered by how much is at stake, grouped by when you lose the chance</span></header>
       <div class="in">${body}</div></div>`;
   },
