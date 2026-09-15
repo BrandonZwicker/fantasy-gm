@@ -11,6 +11,7 @@ import {
 } from './advice.js';
 import { fetchInjuryReport } from './injuries.js';
 import { INACTIVES_LEAD_MIN, fetchKickoffs, swapDeadline } from './schedule.js';
+import { breakTie, fetchSentiment, sentimentOf } from './sentiment.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
@@ -32,6 +33,12 @@ const URGENCY = { lineup: 3.2, waiver: 1.6, trade: 0.9, info: 0.35 };
  * Warnings (a bye, an injured starter) are never filtered — certainties, not
  * edges.
  */
+// Below this two players are the same player as far as the numbers go, and
+// there is nothing to discuss. Between here and the start/sit floor the
+// projection cannot settle it, so the decision moves to evidence the
+// projection has not absorbed yet.
+export const COIN_FLIP_MIN = 0.75;
+
 export const THRESHOLDS = {
   startSit: 2.5,       // points this week — about 60% confidence
   waiverPerWeek: 1.5,  // points per remaining week
@@ -73,17 +80,19 @@ export async function buildReport(leagueId, userId, { anonymize = false,
   // the current week drives start/sit. Later weeks refine both, loaded after
   // the first paint so the page isn't blocked on 14 requests.
   onProgress('Scoring every NFL player under your rules…');
-  const [, , injuries, kickoffs] = await Promise.all([
+  const [, , injuries, kickoffs, sentiment] = await Promise.all([
     state.projections.loadSeason(),
     state.projections.loadWeek(week),
     // News and schedule are enhancements: if ESPN is unreachable we fall back
     // to the Sleeper designation rather than failing the whole report.
     fetchInjuryReport().catch(() => new Map()),
     fetchKickoffs().catch(() => new Map()),
+    fetchSentiment().catch(() => new Map()),
   ]);
   state.players.attachInjuries(injuries);
   state.injuries = injuries;
   state.kickoffs = kickoffs;
+  state.sentiment = sentiment;
 
   return assemble(state, { onProgress });
 }
@@ -435,6 +444,32 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     }
   }
 
+  /* ---- the league is dumping one of your starters ---- */
+  if (me && lineup) {
+    for (const s of lineup.slots) {
+      if (!s.player_id) continue;
+      const sent = sentimentOf(state.sentiment, s.player_id);
+      if (!sent || sent.direction >= 0 || sent.strength < 0.6) continue;
+      const pl = state.players.get(s.player_id);
+      if (!pl) continue;
+      actions.push({
+        kind: 'alert',
+        headline: `${pl.name} is ${sent.verdict}, and he is in your lineup`,
+        detail: 'Projections lag news. Worth finding out what everyone else knows.',
+        payload: { player_id: s.player_id, sentiment: sent },
+        impact: 0, per_week: 0, weight: 2.4,
+        horizon: 'Before kickoff',
+        reasoning: [{ h: 'Why this is worth a look', t:
+          `His projection still reads ${(weekRaw[s.player_id] ?? 0).toFixed(1)}, `
+          + `so on paper nothing has changed. But ${sent.drops.toLocaleString()} `
+          + `managers dropped him in the last 24 hours against `
+          + `${sent.adds.toLocaleString()} adds, which usually means news that `
+          + `the projection has not caught up with. It is worth two minutes of `
+          + `reading before you leave him in.` }],
+      });
+    }
+  }
+
   /* ---- alerts from change detection ---- */
   const INFO_WEIGHT = { 'critical:true': 5, 'critical:false': 2.2,
                         'high:true': 1.9, 'high:false': 0.9 };
@@ -474,6 +509,41 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     }
     return false;
   };
+
+  // A start/sit inside the error band is not a recommendation, it is a coin
+  // flip. Rather than hide it or assert it, hand it over with whatever
+  // evidence exists outside the projection and let the manager call it.
+  const closeCalls = [];
+  for (const a of actions) {
+    if (a.kind !== 'start_sit') continue;
+    if (a.impact >= floor.startSit || a.impact < COIN_FLIP_MIN) continue;
+    const inId = a.payload.player_id;
+    const outId = a.payload.bench;
+    if (!outId) continue;
+    const pin = state.players.get(inId);
+    const pout = state.players.get(outId);
+    const tie = breakTie({
+      inSent: sentimentOf(state.sentiment, inId),
+      outSent: sentimentOf(state.sentiment, outId),
+      inProb: pin?.playProb, outProb: pout?.playProb,
+      inName: pin?.name || 'the incoming player',
+      outName: pout?.name || 'the current starter',
+    });
+    closeCalls.push({
+      in_id: inId, out_id: outId,
+      in_name: pin?.name || inId, out_name: pout?.name || outId,
+      slot: a.payload.slot,
+      gap: a.impact,
+      in_points: weekRaw[inId] ?? 0,
+      out_points: weekRaw[outId] ?? 0,
+      tiebreak: tie,
+      verdict: !tie ? 'stay put'
+             : tie.favours === 'in' ? 'lean to the swap'
+             : tie.favours === 'out' ? 'stay put'
+             : 'stay put',
+    });
+  }
+  closeCalls.sort((a, b) => b.gap - a.gap);
 
   const held = actions.filter(belowFloor);
   const rest = actions.filter(a => !belowFloor(a));
@@ -533,6 +603,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     faab_left: faabLeft, next_waiver: nextWaiver, deadlines,
     thresholds: floor,
     speculative,
+    close_calls: closeCalls,
     waiver_day_of_week: rules.waiverDayOfWeek,
     held_back: held.length,
     // Deadline wording for each group, built from this league's own settings.
