@@ -4,6 +4,7 @@ import { Sleeper } from './engine.js';
 import { assemble, buildReport, refine } from './report.js';
 import { EXAMPLE, PLATFORMS } from './providers.js';
 import { EVENT_KINDS, LEAD_TIMES, downloadICS } from './reminders.js';
+import { buildSVG, svgToPng } from './proposal.js';
 
 const KEY = 'fantasy-gm.session';
 const PREF = 'fantasy-gm.prefs';
@@ -347,7 +348,7 @@ const CARDS = {
   },
 
   trades(r) {
-    const body = r.trades.length ? r.trades.map(t => {
+    const body = r.trades.length ? r.trades.map((t, i) => {
       const cls = t.acceptance === 'likely' ? 'likely' : t.acceptance === 'possible' ? 'possible' : 'longshot';
       return `<div class="deal">
         <div class="hdr"><b>${esc(t.partner_name)}</b>
@@ -356,7 +357,18 @@ const CARDS = {
         <div class="swap">
           <div class="lb">send</div><div class="out">${t.send.map(plain).join(', ')}</div>
           <div class="lb">get</div><div class="inn">${t.receive.map(plain).join(', ')}</div>
-        </div><p class="why">${esc(t.rationale)}</p></div>`;
+        </div><p class="why">${esc(t.rationale)}</p>
+        ${t.proposal ? `<details class="pkg" data-deal="${i}">
+          <summary>Trade proposal package</summary>
+          <div class="pkg-in">
+            <div class="pkg-card" id="pkgcard-${i}"></div>
+            <div class="pkg-actions">
+              <button class="btn" data-copy="${i}">Copy the message</button>
+              <button class="btn" data-png="${i}">Download the graphic</button>
+            </div>
+            <pre class="pkg-msg" id="pkgmsg-${i}">${esc(t.proposal.message)}</pre>
+          </div></details>` : ''}
+        </div>`;
     }).join('') : `<div class="notice">${esc(r.trade_note || 'No mutually beneficial trades right now.')}</div>`;
     return `<div class="card"><header><h3>Trades worth offering</h3></header>
       <div class="in">${body}</div></div>`;
@@ -533,6 +545,52 @@ function render(r, { isExample }) {
     if (!m || m === PREFS.mode) return;
     PREFS.mode = m; savePrefs(); render(r, { isExample });
   };
+  // Trade proposal packages: render the card lazily when one is opened.
+  document.querySelectorAll('details.pkg').forEach(d => {
+    d.addEventListener('toggle', () => {
+      if (!d.open) return;
+      const i = d.dataset.deal;
+      const host = document.getElementById(`pkgcard-${i}`);
+      const deal = r.trades[i];
+      if (host && deal?.proposal && !host.dataset.done) {
+        host.innerHTML = buildSVG(deal.proposal);
+        host.dataset.done = '1';
+      }
+    });
+  });
+  document.querySelectorAll('[data-copy]').forEach(b => {
+    b.onclick = async () => {
+      const msg = r.trades[b.dataset.copy]?.proposal?.message || '';
+      try {
+        await navigator.clipboard.writeText(msg);
+        hint('Message copied, paste it into your league chat');
+      } catch {
+        // Clipboard is blocked in some contexts, so fall back to selecting it.
+        const pre = document.getElementById(`pkgmsg-${b.dataset.copy}`);
+        if (pre) {
+          const sel = window.getSelection(); const rng = document.createRange();
+          rng.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rng);
+          hint('Select-all is ready, press copy');
+        }
+      }
+    };
+  });
+  document.querySelectorAll('[data-png]').forEach(b => {
+    b.onclick = async () => {
+      const deal = r.trades[b.dataset.png];
+      if (!deal?.proposal) return;
+      try {
+        const blob = await svgToPng(buildSVG(deal.proposal));
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `trade-${deal.partner_name.replace(/\W+/g, '-').toLowerCase()}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        hint('Graphic downloaded');
+      } catch { hint('Could not render the graphic here'); }
+    };
+  });
+
   // Reminder controls (present on the League tab and in one-page mode).
   const leadSeg = document.getElementById('leadseg');
   if (leadSeg) leadSeg.onclick = (e) => {

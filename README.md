@@ -34,6 +34,19 @@ adding the same player, and priority leagues show your waiver position instead.
 **Trades.** Re-optimizes both rosters and only suggests deals which improve both
 teams. Offers that would look insulting get filtered out rather than shown.
 
+**Trade proposal package.** A trade only happens if the other manager says yes,
+and nobody says yes to a wall of numbers about how much it helps you. So every
+proposed deal comes with a shareable graphic and a written pitch built from
+their side of it, showing which hole it fills for them and what their starting
+lineup is worth before and after. It argues honestly, which matters more than it
+sounds. An early version claimed a player was "depth you can't get on the field"
+when he was actually their starting receiver, which is the sort of line that
+gets a proposal ignored and makes you look like you never read their roster. It
+now checks whether the piece genuinely sits on their bench, and where it doesn't
+it says so outright and argues from depth instead. It also admits the trade
+helps you, since only mutual-gain deals get proposed and pretending otherwise
+costs you credibility for a whole season.
+
 ## Knowing when the number isn't evidence
 
 This is the part I spent the most time on. I compared ~3,700 player-weeks of

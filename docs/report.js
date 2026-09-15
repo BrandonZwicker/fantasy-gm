@@ -12,6 +12,7 @@ import {
 import { fetchInjuryReport } from './injuries.js';
 import { INACTIVES_LEAD_MIN, fetchKickoffs, swapDeadline } from './schedule.js';
 import { breakTie, fetchSentiment, sentimentOf } from './sentiment.js';
+import { buildCase, buildMessage } from './proposal.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
@@ -446,6 +447,14 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
           + `injuries land.`;
       }
     }
+    // Build the pitch for each deal while the roster maths is still in scope.
+    for (const tr of trades) {
+      try {
+        const c = buildCase(state, tr, ros);
+        if (c) tr.proposal = { ...c, message: buildMessage(c) };
+      } catch { /* a missing partner should not sink the report */ }
+    }
+
     const acceptFactor = { likely: 1, possible: 0.7, 'long shot': 0.4 };
     const startingThisWeek = new Set(lineup ? lineup.starterIds() : []);
     for (const t of trades.slice(0, 4)) {
