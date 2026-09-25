@@ -5,6 +5,7 @@ import { assemble, buildReport, refine } from './report.js';
 import { EXAMPLE, PLATFORMS } from './providers.js';
 import { EVENT_KINDS, LEAD_TIMES, downloadICS } from './reminders.js';
 import { buildSVG, svgToPng } from './proposal.js';
+import { pronouns } from './engine.js';
 
 const KEY = 'fantasy-gm.session';
 const PREF = 'fantasy-gm.prefs';
@@ -291,7 +292,7 @@ const CARDS = {
       return `<tr class="${s.locked ? 'lockedrow' : ''}${swapIn ? ' swapin' : ''}">
         <td><span class="slot">${esc(s.slot)}</span></td>
         <td class="who">${who(s.player_id)}
-          ${swapIn ? '<span class="movetag in">start him</span>' : ''}
+          ${swapIn ? `<span class="movetag in">start ${pronouns(pinfo(s.player_id).position).obj}</span>` : ''}
           ${s.locked ? '<span class="lockicon" title="game has kicked off">locked</span>' : ''}</td>
         <td class="n">${s.player_id ? shown(s.player_id, s.points) : s.points.toFixed(1)}</td></tr>`;
     }).join('');
@@ -301,7 +302,7 @@ const CARDS = {
       return `<tr class="bench${swapOut ? ' swapout' : ''}">
         <td><span class="slot bn">BN</span></td>
         <td class="who">${who(id)}
-          ${swapOut ? '<span class="movetag out">bench him</span>' : ''}</td>
+          ${swapOut ? `<span class="movetag out">bench ${pronouns(pinfo(id).position).obj}</span>` : ''}</td>
         <td class="n dim">${shown(id, p)}</td></tr>`;
     }).join('');
 

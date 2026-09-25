@@ -21,6 +21,16 @@ from .sleeper import Sleeper
 # is worth zero this week, a player who might play is worth his projection, and
 # the designation is shown so the decision stays with the user.
 
+def pronouns(position: str | None) -> dict[str, str]:
+    """A team defense is a unit, not a person, so write-ups must not call it
+    "he". Kickers are people, defenses are not."""
+    if (position or "").upper() in {"DEF", "DST", "D/ST"}:
+        return {"subj": "it", "Subj": "It", "obj": "it",
+                "poss": "its", "Poss": "Its"}
+    return {"subj": "he", "Subj": "He", "obj": "him",
+            "poss": "his", "Poss": "His"}
+
+
 # Designations meaning the player will not suit up this week.
 OUT_THIS_WEEK = {"Out", "IR", "PUP", "Sus", "NA", "DNR", "Doubtful"}
 

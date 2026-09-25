@@ -4,7 +4,7 @@
 
 import {
   LeagueState, ProjectionBook, SLOT_ELIGIBILITY, Sleeper,
-  lineupValue, optimize, replacementLevels, vor,
+  lineupValue, optimize, pronouns, replacementLevels, vor,
 } from './engine.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -164,37 +164,39 @@ function evaluate(state, candidates, rosterPts, positions, weekRoster, weekPts,
     const bye = state.projections.byeFor(pid);
     if (bye && bye >= state.currentWeek) bits.push(`bye week ${bye}`);
 
+    const pr = pronouns(p.position);
     const why = [];
-    why.push({ h: "What he's worth in your league", t:
+    why.push({ h: `What ${pr.subj === 'it' ? 'it' : 'he'}'s worth in your league`, t:
       `${rosPts.toFixed(1)} projected points from here to the playoffs, scored `
       + `with your league's own settings (${rules.pprLabel}`
       + (rules.tePremium ? `, TE premium +${rules.tePremium}/rec` : '')
       + `). Replacement level at ${p.position} in a ${rules.numTeams}-team league `
       + `like yours is roughly the ${ranks[p.position] ?? '—'}th ${p.position}, so `
-      + `he is genuinely above what's freely available.` });
+      + `${pr.subj} is genuinely above what's freely available.` });
 
     why.push({ h: 'Where he fits', t: fills
-      ? `He starts at ${fills}`
+      ? `${pr.Subj} starts at ${fills}`
         + (pushedName ? `, pushing ${pushedName} out of your lineup` :
            ', filling a slot nothing on your roster covers')
         + ` — worth ${marginal.toFixed(1)} extra points spread over the `
         + `${weeksLeft} weeks before playoffs, or about `
         + `${(marginal / Math.max(1, weeksLeft)).toFixed(1)} a week.`
-      : 'He does not crack your starting lineup outright, but he raises your '
-        + 'floor across byes and injuries.' });
+      : `${pr.Subj} does not crack your starting lineup outright, but ${pr.subj} `
+        + 'raises your floor across byes and injuries.' });
 
     why.push({ h: 'Why this is measured as a gain', t:
-      `Ranked by what he adds to your STARTING lineup (+${marginal.toFixed(1)}), `
-      + `not by his raw projection. A player who never starts is worth nothing `
-      + `to you no matter how good his ranking looks — that is why bigger names `
-      + `below him on the wire are not recommended.` });
+      `Ranked by what ${pr.subj} adds to your STARTING lineup (+${marginal.toFixed(1)}), `
+      + `not by ${pr.poss} raw projection. Anyone who never starts is worth nothing `
+      + `to you no matter how good the ranking looks, which is why bigger names `
+      + `below ${pr.obj} on the wire are not recommended.` });
 
     if (drop) {
+      const dp = pronouns(drop.position);
       why.push({ h: `Why drop ${drop.name}`, t:
-        `Cutting him costs you ${drop.cost.toFixed(1)} points of lineup value`
-        + (drop.cost < 0.5 ? ' — nothing, because someone behind him absorbs the role' : '')
-        + `. He is the cheapest legal cut that isn't in your week-${state.currentWeek} `
-        + `lineup, and he is not worth more than the player coming in. `
+        `Cutting ${dp.obj} costs you ${drop.cost.toFixed(1)} points of lineup value`
+        + (drop.cost < 0.5 ? `, nothing at all, because someone behind ${dp.obj} absorbs the role` : '')
+        + `. ${dp.Subj} is the cheapest legal cut that isn't in your week-${state.currentWeek} `
+        + `lineup, and ${dp.subj} is not worth more than what is coming in. `
         + `Net gain after the swap: ${net.toFixed(1)}.` });
     }
 
@@ -204,7 +206,7 @@ function evaluate(state, candidates, rosterPts, positions, weekRoster, weekPts,
           + `${(net / Math.max(1, weeksLeft)).toFixed(1)} per week. That scales to `
           + `${pct.toFixed(0)}% of your $${budgetLeft} remaining budget`
           + (tr > 5000 ? `, bumped up because ${tr.toLocaleString()} managers added `
-             + `him in the last 24 hours and you will be outbid at a token price.` : '.')
+             + `${pr.obj} in the last 24 hours and you will be outbid at a token price.` : '.')
           + (POSITION_BID_CAP[p.position]
              ? ` Capped low because ${p.position} is a streaming position — next `
                + `week's option is nearly as good.` : '') }
@@ -215,10 +217,10 @@ function evaluate(state, candidates, rosterPts, positions, weekRoster, weekPts,
           + `real price.` });
 
     const risks = [];
-    if (p.injuryNote) risks.push(`he is listed ${p.injuryNote}`);
-    if (bye && bye >= state.currentWeek) risks.push(`his bye is week ${bye}`);
+    if (p.injuryNote) risks.push(`${pr.subj} is listed ${p.injuryNote}`);
+    if (bye && bye >= state.currentWeek) risks.push(`${pr.poss} bye is week ${bye}`);
     if (tr > 30000) risks.push(`${tr.toLocaleString()} adds league-wide in 24h means real competition`);
-    if (marginalWeek < 0.5) risks.push('he does not help your lineup this week — this is a rest-of-season play');
+    if (marginalWeek < 0.5) risks.push(`${pr.subj} does not help your lineup this week, so this is a rest-of-season play`);
     if (risks.length) {
       why.push({ h: 'What could go wrong', t:
         risks[0][0].toUpperCase() + risks[0].slice(1)

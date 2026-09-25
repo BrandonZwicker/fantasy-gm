@@ -250,6 +250,15 @@ export class LeagueRules {
   }
 }
 
+/* A team defense is a unit, not a person, so the write-ups have to stop calling
+ * it "he". Kickers are people, defenses are not. */
+export function pronouns(position) {
+  const unit = position === 'DEF' || position === 'DST' || position === 'D/ST';
+  return unit
+    ? { subj: 'it', Subj: 'It', obj: 'it', poss: 'its', Poss: 'Its' }
+    : { subj: 'he', Subj: 'He', obj: 'him', poss: 'his', Poss: 'His' };
+}
+
 export function positionsInPlay(rules) {
   const s = new Set();
   for (const slot of rules.startingSlots) for (const p of eligible(slot)) s.add(p);

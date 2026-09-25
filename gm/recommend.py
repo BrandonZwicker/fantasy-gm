@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from . import db
 from .league import LeagueState
 from .lineup import Lineup, optimize
+from .players import pronouns
 from .scoring import SLOT_ELIGIBILITY
 from .monitor import Change, detect
 from .sleeper import Sleeper
@@ -340,7 +341,9 @@ def build_report(league_id: str, user_id: str | None = None, *,
                     trade_note += (
                         f"Your most tradeable surplus is {' and '.join(names)}: "
                         "real value your lineup can't start. Shop "
-                        + ("them" if len(names) > 1 else "him")
+                        + ("them" if len(names) > 1
+                           else pronouns(state.players.get(chips[0][0]).position
+                                         if state.players.get(chips[0][0]) else None)["obj"])
                         + " to a manager thin at that position and re-check "
                         "after the first injuries land."
                     )

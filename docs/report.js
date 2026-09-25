@@ -4,7 +4,7 @@
 
 import {
   LeagueState, SLOT_ELIGIBILITY, Sleeper,
-  edgeConfidence, optimize, replacementLevels, vor,
+  edgeConfidence, optimize, pronouns, replacementLevels, vor,
 } from './engine.js';
 import {
   detectChanges, dropCandidates, findTrades, recommendWaivers, tradeChips,
@@ -250,8 +250,9 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
       const injuryOf = (id) => {
         const pl = state.players.get(id);
         if (!pl || pl.playProb == null || pl.playProb > 0.95) return null;
-        return { name: pl.name, prob: pl.playProb, reason: pl.injuryReason,
-                 note: pl.injuryNote, raw: weekRaw[id] ?? 0 };
+        return { name: pl.name, position: pl.position, prob: pl.playProb,
+                 reason: pl.injuryReason, note: pl.injuryNote,
+                 raw: weekRaw[id] ?? 0 };
       };
       const inInj = injuryOf(newPid);
       const outInj = outPid ? injuryOf(outPid) : null;
@@ -266,11 +267,13 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
       const why = [];
 
       if (injured.length) {
-        const detail = injured.map(i =>
-          `${i.name} projects ${i.raw.toFixed(1)} if he plays, but the latest `
-          + `report has him about ${Math.round(i.prob * 100)}% to suit up `
-          + `(${i.reason}) — worth roughly ${(i.raw * i.prob).toFixed(1)} once `
-          + `that is priced in`).join('. ');
+        const detail = injured.map(i => {
+          const q = pronouns(i.position);
+          return `${i.name} projects ${i.raw.toFixed(1)} if ${q.subj} plays, but the `
+            + `latest report has ${q.obj} about ${Math.round(i.prob * 100)}% to suit up `
+            + `(${i.reason}), worth roughly ${(i.raw * i.prob).toFixed(1)} once `
+            + `that is priced in`;
+        }).join('. ');
 
         if (dl && !dl.locked) {
           // The single most useful thing here is when to look again.
@@ -279,8 +282,8 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
             + `deliberately below the one in the Sleeper app. ${detail}. `
             + `Inactives are published about ${INACTIVES_LEAD_MIN} minutes before the `
             + `${at(dl.locksAt)} kickoff, so ${at(dl.checkBy)} is the last moment `
-            + `the news can still change your mind. If he is active, the gap `
-            + `narrows sharply and this may be worth reversing.` });
+            + `the news can still change your mind. If ${pronouns(injured[0].position).subj} `
+            + `is active, the gap narrows sharply and this may be worth reversing.` });
         } else if (dl && dl.locked) {
           why.push({ h: 'This window has closed', t:
             `The first of these two has already kicked off, so the swap is no `
@@ -435,7 +438,8 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
         + 'league are still balanced, which is normal early. ';
       if (chips.length) {
         tradeNote += `Your most tradeable surplus is ${chips.join(' and ')}: real `
-          + `value your lineup can't start. Shop ${chips.length > 1 ? 'them' : 'him'} `
+          + `value your lineup can't start. Shop ${chips.length > 1 ? 'them'
+              : pronouns(state.players.get(chipIds[0])?.position).obj} `
           + `to a manager thin at that position and re-check after the first `
           + `injuries land.`;
       }
@@ -475,9 +479,12 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
           ...(alsoStarting.length ? [{ h: 'Set your lineup first', t:
             `${alsoStarting.join(' and ')} ${alsoStarting.length > 1 ? 'are' : 'is'} `
             + `in your week ${week} lineup. Trades take days to negotiate and `
-            + `lineups lock at kickoff, so start ${alsoStarting.length > 1 ? 'them' : 'him'} `
-            + `this week and let the offer run — just replace `
-            + `${alsoStarting.length > 1 ? 'them' : 'him'} if it is accepted first.` }] : []),
+            + `lineups lock at kickoff, so start ${alsoStarting.length > 1 ? 'them'
+                : pronouns(state.players.get(t.send.find(p => startingThisWeek.has(p)))?.position).obj} `
+            + `this week and let the offer run, just replace `
+            + `${alsoStarting.length > 1 ? 'them'
+                : pronouns(state.players.get(t.send.find(p => startingThisWeek.has(p)))?.position).obj} `
+            + `if it is accepted first.` }] : []),
           { h: 'What you gain', t:
             `Your starting lineup improves by ${t.my_gain.toFixed(1)} points `
             + `rest-of-season — about ${perWeek.toFixed(1)} per week over the `
@@ -509,18 +516,19 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
       if (!pl) continue;
       actions.push({
         kind: 'alert',
-        headline: `${pl.name} is ${sent.verdict}, and he is in your lineup`,
+        headline: `${pl.name} is ${sent.verdict}, and ${pronouns(pl.position).subj} is in your lineup`,
         detail: 'Projections lag news. Worth finding out what everyone else knows.',
         payload: { player_id: s.player_id, sentiment: sent },
         impact: 0, per_week: 0, weight: 2.4,
         horizon: 'Before kickoff',
         reasoning: [{ h: 'Why this is worth a look', t:
-          `His projection still reads ${(weekRaw[s.player_id] ?? 0).toFixed(1)}, `
-          + `so on paper nothing has changed. But ${sent.drops.toLocaleString()} `
-          + `managers dropped him in the last 24 hours against `
+          `${pronouns(pl.position).Poss} projection still reads `
+          + `${(weekRaw[s.player_id] ?? 0).toFixed(1)}, so on paper nothing has `
+          + `changed. But ${sent.drops.toLocaleString()} managers dropped `
+          + `${pronouns(pl.position).obj} in the last 24 hours against `
           + `${sent.adds.toLocaleString()} adds, which usually means news that `
-          + `the projection has not caught up with. It is worth two minutes of `
-          + `reading before you leave him in.` }],
+          + `the projection has not caught up with. Worth two minutes of `
+          + `reading before leaving ${pronouns(pl.position).obj} in.` }],
       });
     }
   }

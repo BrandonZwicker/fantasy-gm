@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .league import LeagueState
+from .players import pronouns
 from .lineup import lineup_value, optimize
 from .scoring import SLOT_ELIGIBILITY
 from .value import ReplacementLevels, vor
@@ -259,19 +260,20 @@ def _evaluate(state: LeagueState, candidates: list[tuple[str, float]],
             state.players.get(x).name for x in pushed if state.players.get(x)
         )
 
+        pr = pronouns(p.position)
         why: list[dict] = []
-        why.append({"h": "What he's worth in your league", "t":
+        why.append({"h": f"What {pr['subj'] if pr['subj'] == 'it' else 'he'}'s worth in your league", "t":
             f"{ros_pts:.1f} projected points from here to the playoffs, scored "
             f"with your league's own settings ({rules.ppr_label}"
             + (f", TE premium +{rules.te_premium}/rec" if rules.te_premium else "")
             + f"). Replacement level at {p.position} in a {rules.num_teams}-team "
               f"league like yours is roughly the "
-              f"{levels_rank.get(p.position, '—')}th {p.position}, so he is "
+              f"{levels_rank.get(p.position, '—')}th {p.position}, so {pr['subj']} is "
               f"genuinely above what's freely available."})
 
         if fills:
             why.append({"h": "Where he fits", "t":
-                f"He starts at {fills}"
+                f"{pr['Subj']} starts at {fills}"
                 + (f", pushing {pushed_name} out of your lineup" if pushed_name
                    else ", filling a slot nothing on your roster covers")
                 + f" — worth {marginal:.1f} extra points spread over the "
@@ -279,30 +281,32 @@ def _evaluate(state: LeagueState, candidates: list[tuple[str, float]],
                   f"{marginal/max(1,weeks_left):.1f} a week."})
         else:
             why.append({"h": "Where he fits", "t":
-                "He does not crack your starting lineup outright, but he raises "
-                "your floor across byes and injuries."})
+                f"{pr['Subj']} does not crack your starting lineup outright, but "
+                f"{pr['subj']} raises your floor across byes and injuries."})
 
         why.append({"h": "Why this is measured as a gain", "t":
-            f"Ranked by what he adds to your STARTING lineup (+{marginal:.1f}), "
-            f"not by his raw projection. A player who never starts is worth "
-            f"nothing to you no matter how good his ranking looks — that is why "
-            f"bigger names below him on the wire are not recommended."})
+            f"Ranked by what {pr['subj']} adds to your STARTING lineup "
+            f"(+{marginal:.1f}), not by {pr['poss']} raw projection. Anyone who "
+            f"never starts is worth nothing to you no matter how good the "
+            f"ranking looks, which is why bigger names below {pr['obj']} on the "
+            f"wire are not recommended."})
 
         if drop:
+            dp = pronouns(drop.position)
             why.append({"h": f"Why drop {drop.name}", "t":
-                f"Cutting him costs you {drop.cost:.1f} points of lineup value"
-                + (" — nothing, because someone behind him absorbs the role"
-                   if drop.cost < 0.5 else "")
-                + f". He is the cheapest legal cut that isn't in your week-"
-                  f"{state.current_week} lineup, and he is not worth more than "
-                  f"the player coming in. Net gain after the swap: {net:.1f}."})
+                f"Cutting {dp['obj']} costs you {drop.cost:.1f} points of lineup value"
+                + (f", nothing at all, because someone behind {dp['obj']} absorbs "
+                   "the role" if drop.cost < 0.5 else "")
+                + f". {dp['Subj']} is the cheapest legal cut that isn't in your "
+                  f"week-{state.current_week} lineup, and {dp['subj']} is not worth "
+                  f"more than what is coming in. Net gain after the swap: {net:.1f}."})
 
         if rules.uses_faab:
             why.append({"h": f"Why ${bid}", "t":
                 f"{net:.1f} points over {weeks_left} remaining weeks is "
                 f"{net/max(1,weeks_left):.1f} per week. That scales to {pct:.0f}% "
                 f"of your ${budget_left} remaining budget"
-                + (f", bumped up because {tr:,} managers added him in the last "
+                + (f", bumped up because {tr:,} managers added {pr['obj']} in the last "
                    f"24 hours and you will be outbid at a token price."
                    if tr > 5000 else ".")
                 + ("" if p.position not in POSITION_BID_CAP else
@@ -317,15 +321,15 @@ def _evaluate(state: LeagueState, candidates: list[tuple[str, float]],
 
         risks = []
         if p.injury_note:
-            risks.append(f"he is listed {p.injury_note}")
+            risks.append(f"{pr['subj']} is listed {p.injury_note}")
         bye_w = state.projections.bye_for(pid)
         if bye_w and bye_w >= state.current_week:
-            risks.append(f"his bye is week {bye_w}")
+            risks.append(f"{pr['poss']} bye is week {bye_w}")
         if tr > 30_000:
             risks.append(f"{tr:,} adds league-wide in 24h means real competition")
         if marginal_week < 0.5:
-            risks.append("he does not help your lineup this week — this is a "
-                         "rest-of-season play")
+            risks.append(f"{pr['subj']} does not help your lineup this week, so "
+                         "this is a rest-of-season play")
         if risks:
             why.append({"h": "What could go wrong", "t":
                 risks[0][0].upper() + risks[0][1:]
