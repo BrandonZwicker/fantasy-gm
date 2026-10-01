@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 
 from . import db
 from .league import LeagueState
-from .lineup import Lineup, optimize
+from .lineup import Lineup, LineupSlot, optimize
 from .players import pronouns
 from .scoring import SLOT_ELIGIBILITY
 from .monitor import Change, detect
@@ -171,6 +171,7 @@ def build_report(league_id: str, user_id: str | None = None, *,
 
         current_total = round(sum(week_pts.get(p, 0.0) for p in current_starters), 2)
         lineup_gain = round(lineup.total - current_total, 2)
+        _current_total = current_total
 
         # ---- start/sit ----
         # Report who actually enters and leaves the lineup. A player moving
@@ -420,6 +421,41 @@ def build_report(league_id: str, user_id: str | None = None, *,
 
     held_back = sum(1 for a in actions if _below_floor(a))
     actions = [a for a in actions if not _below_floor(a)]
+
+    # The lineup has to match what is actually recommended. Reporting the
+    # theoretical optimum while filtering the actions produced a digest which
+    # said "2.5 points available" and "nothing needs doing" in the same breath.
+    if me and lineup is not None:
+        slots = rules.starting_slots
+        filled: list[str | None] = [
+            (current_starters[i] if i < len(current_starters)
+             and current_starters[i] not in ("0", "") else None)
+            for i in range(len(slots))
+        ]
+        for a in actions:
+            if a.kind != "start_sit":
+                continue
+            out_pid = a.payload.get("bench")
+            if out_pid and out_pid in filled:
+                filled[filled.index(out_pid)] = a.payload.get("player_id")
+        # A slot the current lineup left empty still takes the best legal option.
+        for i, s in enumerate(lineup.slots):
+            if filled[i] is None and s.player_id:
+                filled[i] = s.player_id
+
+        started = {p for p in filled if p}
+        roster_week = {pid: week_pts.get(pid, 0.0) for pid in me.active_players()}
+        lineup = Lineup(
+            slots=[LineupSlot(slot=slots[i], player_id=filled[i],
+                              points=round(week_pts.get(filled[i], 0.0), 2)
+                              if filled[i] else 0.0)
+                   for i in range(len(slots))],
+            bench=sorted(((pid, round(pts, 2))
+                          for pid, pts in roster_week.items() if pid not in started),
+                         key=lambda kv: -kv[1]),
+            total=round(sum(week_pts.get(p, 0.0) for p in filled if p), 2),
+        )
+        lineup_gain = round(lineup.total - _current_total, 2)
 
     # Rank everything on one scale: points at stake, weighted by how soon the
     # chance to act disappears. This is what orders the list.
