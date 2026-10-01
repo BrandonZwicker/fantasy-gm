@@ -46,8 +46,17 @@ jobs:
         run: |
           set +e
           python cli.py digest --out digest.md
-          echo "code=$?" >> "$GITHUB_OUTPUT"
-          cat digest.md >> "$GITHUB_STEP_SUMMARY"
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # 0 = something to do, 2 = nothing to do, 3 = not configured.
+          if [ "$code" = "3" ]; then
+            echo "SLEEPER_USERNAME and SLEEPER_LEAGUE_ID are not set, skipping." \
+              >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f digest.md ]; then
+            cat digest.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Never fail the run for being unconfigured or having nothing to say.
+          exit 0
 
       - name: Open an issue when something needs doing
         if: steps.digest.outputs.code == '0'

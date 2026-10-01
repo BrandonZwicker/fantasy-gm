@@ -174,8 +174,11 @@ def cmd_digest(args) -> int:
         u = Sleeper().user(username)
         user_id = u["user_id"] if u else None
     if not (league_id and user_id):
-        _p("Set SLEEPER_LEAGUE_ID and SLEEPER_USERNAME, or run `cli.py link`.")
-        return 1
+        # Exit 3 means "not set up", which is different from "nothing to do".
+        # A scheduled run should skip quietly rather than page you every time.
+        _p("Not configured. Set SLEEPER_LEAGUE_ID and SLEEPER_USERNAME, "
+           "or run `cli.py link`.")
+        return 3
 
     r = build_report(league_id, user_id, force=True)
     urgent = [a for a in r.actions if a.priority <= args.max_priority]
