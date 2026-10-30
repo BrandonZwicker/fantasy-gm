@@ -1,4 +1,4 @@
-/* Fantasy GM — UI. Everything runs client-side; there is no server. */
+/* Fantasy Football GM — UI. Everything runs client-side; there is no server. */
 
 import { Sleeper } from './engine.js';
 import { assemble, buildReport, refine } from './report.js';
@@ -50,7 +50,7 @@ function hint(msg) {
 function renderGate(msg) {
   app().innerHTML = '';
   const g = node(`<div class="gate">
-    <div class="mark">Fantasy <em>GM</em></div>
+    <div class="mark">Fantasy football <em>GM</em></div>
     <p class="lede">Reads your fantasy league end to end and tells you exactly what
       to do about it — lineup changes, waiver claims, trades — scored under your
       league's own settings.</p>

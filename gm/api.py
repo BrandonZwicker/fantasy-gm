@@ -22,7 +22,7 @@ from .sleeper import Sleeper
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 
-app = FastAPI(title="Fantasy GM")
+app = FastAPI(title="Fantasy Football GM")
 
 _cache: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL = 180

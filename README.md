@@ -1,4 +1,4 @@
-# Fantasy GM
+# Fantasy Football GM
 
 **[Try it out](https://brandonzwicker.github.io/fantasy-gm/)**
 
