@@ -90,13 +90,13 @@ export function buildICS(report, { kinds, leadMinutes, weeksAhead = 16 } = {}) {
       const run = nextWeekday(anchor, waiverDay, 3);
       push(run, `Waivers process — ${league}`,
         report.uses_faab
-          ? 'Submit FAAB claims before this. Fantasy GM has your bids ready.'
-          : 'Submit waiver claims before this. Fantasy GM has your targets ready.');
+          ? 'Submit FAAB claims before this. Fantasy Football GM has your bids ready.'
+          : 'Submit waiver claims before this. Fantasy Football GM has your targets ready.');
     }
     if (chosen.has('kickoff')) {
       const kick = nextWeekday(anchor, 0, 13);   // Sunday ~1pm local
       push(kick, `Lineups lock — ${league}`,
-        'Last chance to fix your starters. Check Fantasy GM for start/sit moves.');
+        'Last chance to fix your starters. Check Fantasy Football GM for start/sit moves.');
     }
   }
 
@@ -106,7 +106,7 @@ export function buildICS(report, { kinds, leadMinutes, weeksAhead = 16 } = {}) {
       const when = new Date(now.getTime() + (wk - startWeek) * 7 * 86400000);
       when.setHours(12, 0, 0, 0);
       push(when, `Trade deadline — ${league}`,
-        'Last chance to trade. Check Fantasy GM for offers worth making.');
+        'Last chance to trade. Check Fantasy Football GM for offers worth making.');
     }
   }
 
