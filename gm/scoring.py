@@ -169,6 +169,27 @@ class LeagueRules:
         return sum(1 for p in self.roster_positions if p == "IR")
 
     @property
+    def reserve_slots(self) -> int:
+        """Sleeper keeps IR capacity in settings, not in roster_positions."""
+        v = self.settings.get("reserve_slots")
+        return int(v) if v is not None else self.ir_slots
+
+    @property
+    def ir_eligible(self) -> set[str]:
+        """Injury designations this league lets you park on IR."""
+        s = {"IR", "PUP"}
+        st = self.settings
+        for key, status in (("reserve_allow_out", "Out"),
+                            ("reserve_allow_doubtful", "Doubtful"),
+                            ("reserve_allow_sus", "Sus"),
+                            ("reserve_allow_na", "NA"),
+                            ("reserve_allow_dnr", "DNR"),
+                            ("reserve_allow_cov", "COV")):
+            if st.get(key):
+                s.add(status)
+        return s
+
+    @property
     def taxi_slots(self) -> int:
         return int(self.settings.get("taxi_slots") or 0)
 
@@ -219,7 +240,7 @@ class LeagueRules:
 
     @property
     def waiver_day_of_week(self) -> int:
-        # Sleeper: 0 = Tuesday ... 6 = Monday (day waivers process)
+        # Sleeper: 0 = Monday ... 6 = Sunday (day waivers process)
         return int(self.settings.get("waiver_day_of_week") or 2)
 
     @property

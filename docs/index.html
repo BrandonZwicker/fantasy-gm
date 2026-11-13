@@ -353,6 +353,63 @@ main.focused{max-width:840px}
 .heldback[open] summary::before{transform:rotate(90deg)}
 .heldback summary:hover{color:var(--ink-2)}
 
+/* ---------- the plan ---------- */
+.plan .act:first-child{border-top:0}
+.stagerow{display:flex;gap:6px;margin-bottom:4px}
+.stagerow .chip{margin-top:0}
+.actbody .stagerow + h4{margin-top:0}
+.chip.stage{background:var(--sunk);color:var(--ink-3)}
+.chip.stage.roster{background:var(--urgent-soft);color:var(--urgent)}
+.chip.stage.start_sit{background:var(--accent-soft);color:var(--accent)}
+.chip.stage.waiver{background:var(--gain-soft);color:var(--gain)}
+.chip.stage.alert{background:var(--amber-soft);color:var(--amber)}
+
+/* ---------- who to drop ---------- */
+.overlimit{background:var(--urgent-soft);color:var(--ink);border-radius:12px;
+  padding:13px 16px;margin-bottom:12px;font-size:13.5px;line-height:1.55}
+.overlimit b{color:var(--urgent)}
+.overlimit ol{margin:8px 0 0;padding-left:20px;font-weight:600}
+.overlimit p{margin:6px 0 0;color:var(--ink-2);font-size:12.5px}
+.overlimit.calm{background:var(--sunk)}
+.movetag.ir{background:var(--accent-soft);color:var(--accent)}
+.cutrow td{background:var(--urgent-soft)}
+.foot{margin:10px 0 0;color:var(--ink-3);font-size:12px;line-height:1.55}
+
+/* ---------- trades: sent / received ---------- */
+.subseg{margin:0 0 14px}
+.ofrom{display:flex;align-items:center;gap:10px;margin:4px 0 14px;font-size:13px;color:var(--ink-3);font-weight:600}
+.ofrom select{font:500 14px var(--sans);padding:7px 12px;border-radius:10px;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink);min-width:0;max-width:100%}
+.ocols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.olbl i{float:right;font-style:normal;font-weight:600;letter-spacing:.04em;text-transform:none;padding-right:8px}
+.olbl{font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;color:var(--ink-3);margin-bottom:6px}
+.pick{display:flex;align-items:baseline;gap:7px;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13.5px}
+.pick:hover{background:var(--sunk)}
+.pick.on{background:var(--accent-soft)}
+.pick input{margin:0;accent-color:var(--accent);align-self:center}
+.pick span{color:var(--ink-3);font-size:11.5px}
+.pick em{margin-left:auto;font-style:normal;color:var(--ink-3);font-size:11.5px;font-variant-numeric:tabular-nums}
+.ogo{display:flex;gap:8px;margin:14px 0 4px}
+.verdict{border-radius:12px;padding:14px 16px;margin:14px 0 12px}
+.verdict .vh{font:400 26px/1.1 var(--display)}
+.verdict p{margin:6px 0 0;font-size:13.5px;color:var(--ink-2)}
+.verdict.good{background:var(--gain-soft)} .verdict.good .vh{color:var(--gain)}
+.verdict.even{background:var(--amber-soft)} .verdict.even .vh{color:var(--amber)}
+.verdict.bad{background:var(--urgent-soft)} .verdict.bad .vh{color:var(--urgent)}
+.ostats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.ostats > div{background:var(--sunk);border-radius:10px;padding:10px 12px;min-width:0}
+.ostats .k{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--ink-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ostats .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.ostats .v.up{color:var(--gain)} .ostats .v.down{color:var(--urgent)}
+.ostats .s{font-size:11.5px;color:var(--ink-3)}
+.counter{border:1px solid var(--line);border-radius:12px;padding:12px 15px;margin:12px 0}
+.counter p{margin:6px 0 0;font-size:13.5px}
+@media (max-width: 700px){
+  .ocols{grid-template-columns:1fr}
+  .ostats{grid-template-columns:1fr 1fr}
+}
+
 /* ---------------- mobile ---------------- */
 @media (max-width: 700px){
   main{padding:14px}

@@ -27,7 +27,16 @@ Waivers rank by points added to your starting lineup rather than by projection,
 because a WR4 who never cracks your lineup is worth nothing.
 
 Trades only show up when both rosters improve. Each one comes with a data card
-and a list of key points you can turn into your own message.
+and a list of key points you can turn into your own message. Offers you get can
+be scored too. Sleeper keeps pending offers private, so you tick what's in it
+and it tells you accept, decline or coin flip, plus the one tweak that would
+make it worth taking.
+
+Everything comes out as one numbered plan. Each step is worked out against the
+roster the step before it leaves behind. The roster gets made legal first (IR
+before cutting anyone), pickups get planned on that, and the lineup gets set
+from the players you'll actually have. So nothing contradicts anything else and
+there's never an "or you could do this instead".
 
 ## Knowing when the number isn't evidence
 
@@ -83,7 +92,8 @@ runs the Python version on a schedule if you want proper alerts.
 ```
 docs/     the deployed site, plain ES modules, no framework
 gm/       Python version, same engine plus scheduled monitoring
-tests/    validation, and an end to end test on a synthetic league
+tests/    validation, an end to end run on a synthetic league, and a check
+          that the plan never contradicts itself
 ```
 
 ## Running it

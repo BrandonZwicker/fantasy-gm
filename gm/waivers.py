@@ -81,7 +81,7 @@ def _rank_drops(rules, roster_pts: dict[str, float], positions: dict[str, str],
         p = players.get(pid)
         out.append(DropCandidate(
             player_id=pid,
-            name=p.label() if p else pid,
+            name=p.name if p else pid,
             position=p.position if p else "?",
             cost=round(base - without, 2),
             projection_ros=round(roster_pts.get(pid, 0.0), 2),

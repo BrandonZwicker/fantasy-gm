@@ -7,7 +7,8 @@ import {
   edgeConfidence, optimize, pronouns, replacementLevels, vor,
 } from './engine.js';
 import {
-  detectChanges, dropCandidates, findTrades, recommendWaivers, tradeChips,
+  applyMoves, cloneTeam, detectChanges, dropCandidates, findTrades,
+  planRosterFix, recommendWaivers, tradeChips,
 } from './advice.js';
 import { fetchInjuryReport } from './injuries.js';
 import { INACTIVES_LEAD_MIN, fetchKickoffs, swapDeadline } from './schedule.js';
@@ -105,14 +106,112 @@ export async function refine(state, onProgress = () => {}) {
   state.projections.byeCache = null;
 }
 
+/** The steps that make the roster legal, written as actions. */
+function rosterActions(state, fix, weekPts, kickoffOf, at) {
+  const rules = state.rules;
+  const out = [];
+  const name = (pid) => state.players.name(pid);
+  const lockNote = (pid) => {
+    const ko = kickoffOf(pid);
+    return ko ? `Before ${at(ko)}` : 'Now, before anything else';
+  };
+  const overText = fix.over_by > 0
+    ? `You have ${fix.active_count} players on a ${fix.limit}-man roster, ${fix.over_by} over the limit. Sleeper will not process an add, claim or trade until that is fixed.`
+    : '';
+
+  for (const pid of fix.activate) {
+    const p = state.players.get(pid);
+    out.push({
+      kind: 'roster', headline: `ACTIVATE ${name(pid)} from IR`,
+      detail: `${pronouns(p?.position).Subj} is no longer listed as injured, so ${pronouns(p?.position).subj} can't stay on IR.`,
+      payload: { player_id: pid, move: 'activate' },
+      impact: 0, per_week: 0, weight: 9, horizon: 'Now, before anything else',
+      reasoning: [{ h: 'Why this comes first', t:
+        `Sleeper freezes a roster that has a healthy player sitting on IR. No `
+        + `add, drop or trade goes through until ${name(pid)} is moved back.` }],
+    });
+  }
+
+  for (const pid of fix.toIR) {
+    const p = state.players.get(pid);
+    const q = pronouns(p?.position);
+    const needed = fix.over_by > 0 || fix.activate.length > 0;
+    out.push({
+      kind: 'roster', headline: `MOVE ${name(pid)} to IR`,
+      detail: `Listed ${p?.injury_status || 'injured'} and you have an open IR slot. `
+        + `Frees a bench spot for nothing.`,
+      payload: { player_id: pid, move: 'ir' },
+      impact: 0, per_week: 0, weight: needed ? 8 : 1.2,
+      horizon: needed ? 'Now, before anything else' : lockNote(pid),
+      reasoning: [
+        ...(needed ? [{ h: 'Why', t: overText + ' Parking an injured player on IR '
+          + 'clears the space without losing anyone.' }] : []),
+        { h: 'What it costs', t:
+          `Nothing. ${name(pid)} is projected ${(weekPts[pid] || 0).toFixed(1)} this `
+          + `week and stays on your team. When ${q.subj} is cleared, move `
+          + `${q.obj} back to the bench, and you will need a free spot then, `
+          + `so this site will tell you who to cut at that point.` },
+      ],
+    });
+  }
+
+  for (const d of fix.drops) {
+    const q = pronouns(d.position);
+    const why = [
+      { h: 'Why you have to cut someone', t: overText
+        + (fix.toIR.length ? ` Moving ${fix.toIR.map(name).join(' and ')} to IR `
+           + `is not enough on its own.` : fix.open_ir === 0 && rules.reserveSlots
+           ? ' Your IR slots are full.' : ' Nobody else on your roster qualifies for IR.') },
+      { h: `Why ${d.name}`, t:
+        `Every player was tested by taking him off your roster and re-setting the `
+        + `best lineup without him. Losing ${d.name} costs `
+        + `${d.cost.toFixed(1)} points rest-of-season`
+        + (d.cost < 0.5 ? ', which is effectively nothing' : '')
+        + `, the least of anyone ${d.starts_now ? '' : 'outside this week’s lineup'}.`
+        + (d.replaced_by?.length ? ` ${d.replaced_by.join(' and ')} would take `
+           + `${q.poss} spot in your lineup.` : ` ${q.Subj} does not start for you in any week, so the lineup does not change.`) },
+    ];
+    if (d.next) why.push({ h: 'The next cheapest', t:
+      `${d.next.name} would cost ${d.next.cost.toFixed(1)}`
+      + (d.next.starts_now ? ' and starts for you this week' : '')
+      + `. That gap is why ${d.name} goes and ${d.next.name} stays.` });
+    out.push({
+      kind: 'roster', headline: `DROP ${d.name}`,
+      detail: `Costs ${d.cost.toFixed(1)} pts rest of season, the cheapest cut on your roster.`,
+      payload: { player_id: d.player_id, move: 'drop', cost: d.cost },
+      // Below the IR moves: parking someone is free and comes first.
+      impact: 0, per_week: 0, weight: 7.5,
+      horizon: 'Now, before anything else',
+      reasoning: why,
+    });
+  }
+  return out;
+}
+
 const rulesLastWeek = (state) => Math.max(state.currentWeek,
                                           state.rules.playoffWeekStart - 1);
 
-export async function assemble(state, { onProgress = () => {} } = {}) {
+/* The report is a plan, not a menu. Each stage is worked out against the
+ * roster the earlier stages leave behind: the roster is made legal first,
+ * claims are made against that legal roster, and the lineup is set from the
+ * players you will actually have. So no step can contradict, repeat or offer
+ * an alternative to another one.
+ *
+ * The planning mutates a copy of your team installed in `state`; the real one
+ * is put back afterwards so the next pass starts from the truth again.
+ */
+export async function assemble(state, opts = {}) {
+  const myId = state.myRosterId;
+  const original = myId ? state.teams[myId] : null;
+  try { return await assemblePlan(state, opts); }
+  finally { if (original) state.teams[myId] = original; }
+}
+
+async function assemblePlan(state, { onProgress = () => {} } = {}) {
   const floor = THRESHOLDS;
   const rules = state.rules;
   const week = state.currentWeek;
-  const me = state.me;
+  let me = state.me;
   const weeksLeft = Math.max(1, state.weeksRemaining);
 
   const weekMap = state.projections.weeks.get(week) || {};
@@ -136,104 +235,319 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
   let lineup = null, lineupGain = 0, waivers = [], drops = [], trades = [];
   let lineupLocked = false, movableCount = 0;
   let tradeNote = '', faabLeft = 0;
-  const currentStarters = me ? [...me.starters] : [];
+  let rosterFix = null;
+  let lineupUnclaimed = 0;
+  let startersBefore = [];
   const nextWaiver = rules.nextWaiverRun();
+  const added = new Set();          // players the plan brings in
+  const addTiming = new Map();      // pid -> { instant, at, helpsThisWeek }
+
+  // Once a player's game kicks off he is frozen where he is. A starter stays
+  // in his slot and a benched player stays benched, so the optimiser may only
+  // shuffle the players who can still move. Optimising the whole roster
+  // instead advertises points that cannot actually be collected.
+  const gameOf = (pid) => {
+    const tm = state.players.get(pid)?.team;
+    return tm ? state.kickoffs?.get(String(tm).toUpperCase()) : null;
+  };
+  const isLocked = (pid) => Boolean(gameOf(pid)?.started);
+  const kickoffOf = (pid) => gameOf(pid)?.kickoff || null;
+  const at = (d) => d.toLocaleString(undefined,
+    { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+  // Drop moves whose edge is too small to be worth acting on. Warnings stay:
+  // a bye week is a certainty, not a projected edge.
+  const belowFloor = (a) => {
+    if (a.kind === 'start_sit') return !a.payload?.forced && a.impact < floor.startSit;
+    if (a.kind === 'waiver') return a.per_week < floor.waiverPerWeek;
+    if (a.kind === 'trade') return a.impact < floor.tradeGain;
+    return false;
+  };
+  // High upside, low certainty. Worth seeing, but not alongside the calls that
+  // are simply correct.
+  const isSpeculative = (a) => {
+    if (a.kind === 'trade') {
+      return a.payload?.acceptance === 'long shot' && a.impact >= SPECULATIVE_TRADE_GAIN;
+    }
+    if (a.kind === 'waiver') {
+      // Does nothing for you this week, but could pay off across the season.
+      return (a.payload?.marginal_week ?? 1) < 0.5 && a.impact >= SPECULATIVE_STASH_GAIN;
+    }
+    return false;
+  };
+
+  if (me) {
+    // The full ranking is taken from the roster as it stands, so the drop
+    // card answers "who is cheapest to cut" for the team you actually have.
+    drops = dropCandidates(state, ros, 10, weekPts);
+
+    startersBefore = [...me.starters];
+
+    /* ---- step 1: make the roster legal ---- */
+    rosterFix = planRosterFix(state, me, ros, weekPts, { isLocked });
+    me = applyMoves(cloneTeam(me), {
+      toIR: rosterFix.toIR, activate: rosterFix.activate,
+      drop: rosterFix.drops.map(d => d.player_id),
+    });
+    state.teams[state.myRosterId] = me;
+    actions.push(...rosterActions(state, rosterFix, weekPts, kickoffOf, at));
+  }
+  const currentStarters = me ? [...me.starters] : [];
+  // Who held a starting slot before an earlier step emptied it, and why.
+  const vacatedBy = new Map();      // pid -> 'moved to IR' | 'dropped'
+  if (rosterFix) {
+    rosterFix.toIR.forEach(p => vacatedBy.set(p, 'moved to IR'));
+    rosterFix.drops.forEach(d => vacatedBy.set(d.player_id, 'dropped'));
+  }
+
+  if (me) {
+    /* ---- step 2: waivers, against the legal roster ---- */
+    onProgress('Ranking the waiver wire…');
+    faabLeft = Math.max(0, rules.waiverBudget - me.waiver_budget_used);
+    let trending = {};
+    try {
+      for (const t of (await Sleeper.trending('add', 24, 200)) || [])
+        trending[String(t.player_id)] = t.count;
+    } catch {}
+
+    // Whether a pickup is instant or waits for the waiver run decides whether
+    // he can be in this week's lineup.
+    const now = new Date();
+    const runAt = rules.nextWaiverRunAt(now);
+    const kicks = [...(state.kickoffs || new Map()).values()].map(g => +g.kickoff);
+    const firstKick = kicks.length ? new Date(Math.min(...kicks)) : null;
+    // Between the weekly rollover and the waiver run, everyone unowned is on
+    // waivers. After the run they are free agents, except recent drops and
+    // anyone whose game has already started.
+    const waiverPeriod = Boolean(runAt && firstKick && runAt < firstKick);
+    const onWaivers = new Set();
+    if (!state.isLocal && runAt) {
+      const clearMs = (rules.settings.waiver_clear_days ?? 2) * 864e5;
+      for (const w of [week, week - 1]) {
+        if (w < 1) continue;
+        try {
+          for (const tx of (await Sleeper.transactions(rules.leagueId, w)) || []) {
+            if (tx.status !== 'complete' || !tx.drops) continue;
+            const t = tx.status_updated || tx.created || 0;
+            if (now - t < clearMs) for (const pid in tx.drops) onWaivers.add(String(pid));
+          }
+        } catch {}
+      }
+    }
+    const timingOf = (pid) => {
+      if (!runAt) return { instant: true, at: now };
+      if (waiverPeriod || !firstKick || onWaivers.has(pid) || isLocked(pid))
+        return { instant: false, at: runAt };
+      return { instant: true, at: now };
+    };
+
+    waivers = recommendWaivers(state, ros, weekPts, levels, trending, 5);
+
+    for (const w of waivers) {
+      const timing = timingOf(w.player_id);
+      w.instant = timing.instant;
+      const ko = kickoffOf(w.player_id);
+      const helpsThisWeek = Boolean(ko && ko > timing.at
+                                    && state.projections.hasGame(w.player_id, week));
+      const cost = timing.instant
+        ? ' — free agent, no bid needed'
+        : rules.usesFaab && w.faab_bid
+          ? ` — bid $${w.faab_bid} (${w.faab_pct.toFixed(0)}% of your $${faabLeft})`
+          : (!rules.usesFaab && me.waiver_position
+             ? ` — uses your #${me.waiver_position} waiver priority` : '');
+      const perWeek = w.net_gain / weeksLeft;
+      const a = {
+        kind: 'waiver',
+        headline: `${timing.instant ? 'ADD' : 'CLAIM'} ${w.name} (${w.position}-${w.team})`
+                  + (w.drop_id ? `, drop ${w.drop_name}` : '') + cost,
+        detail: w.rationale,
+        payload: {
+          player_id: w.player_id, bid: timing.instant ? 0 : w.faab_bid,
+          drop_id: w.drop_id, instant: timing.instant,
+          net_gain: w.net_gain, marginal_week: w.marginal_week,
+          alternatives: w.alternatives.map(a => ({
+            label: `${a.name} (${a.position}-${a.team})`, bid: a.faab_bid,
+            net_gain: a.net_gain, drop_name: a.drop_name, detail: a.rationale,
+          })),
+        },
+        impact: w.net_gain, per_week: r2(perWeek), unit: 'ros',
+        weight: perWeek * URGENCY.waiver,
+        horizon: timing.instant
+          ? (helpsThisWeek ? `Add before ${at(ko)} to use ${pronouns(w.position).obj} this week`
+                           : 'Free agent — add any time')
+          : `Waivers run ${nextWaiver}`,
+        reasoning: w.reasoning,
+      };
+      actions.push(a);
+
+      // A claim that is going in the plan changes the roster everything after
+      // it is planned against.
+      if (belowFloor(a) || isSpeculative(a)) continue;
+      a.planned = true;
+      added.add(w.player_id);
+      addTiming.set(w.player_id, { ...timing, helpsThisWeek });
+      // Only a pickup that lands before his kickoff joins this week's lineup.
+      // A later claim still happens, but the player he replaces plays first.
+      if (helpsThisWeek) {
+        applyMoves(me, { add: [w.player_id], drop: w.drop_id ? [w.drop_id] : [] });
+        if (w.drop_id) vacatedBy.set(w.drop_id, 'dropped');
+      }
+    }
+  }
 
   if (me) {
     const rosterWeek = {};
     for (const pid of me.activePlayers()) rosterWeek[pid] = weekPts[pid] || 0;
     const positions = state.positionsMap(rosterWeek);
 
-    // Once a player's game kicks off he is frozen where he is. A starter stays
-    // in his slot and a benched player stays benched, so the optimiser may only
-    // shuffle the players who can still move. Optimising the whole roster
-    // instead advertises points that cannot actually be collected.
-    const isLocked = (pid) => {
-      const tm = state.players.get(pid)?.team;
-      const g = tm ? state.kickoffs?.get(String(tm).toUpperCase()) : null;
-      return Boolean(g && g.started);
-    };
-
     const allSlots = rules.startingSlots;
+    // Same-week pickups and IR moves may have vacated a starting slot.
+    me.starters.forEach((pid, i) => { currentStarters[i] = pid; });
+    const onRoster = new Set(me.activePlayers());
     const pinned = new Map();          // slot index -> player already locked in
     currentStarters.forEach((pid, i) => {
-      if (pid && pid !== '0' && i < allSlots.length && isLocked(pid)) pinned.set(i, pid);
+      if (pid && pid !== '0' && i < allSlots.length && onRoster.has(pid)
+          && isLocked(pid)) pinned.set(i, pid);
     });
-
+    const pinnedIds = new Set(pinned.values());
     const freeIdx = allSlots.map((_, i) => i).filter(i => !pinned.has(i));
-    const movable = {};
-    for (const pid of me.activePlayers()) {
-      if (!isLocked(pid)) movable[pid] = weekPts[pid] || 0;
-    }
-
     // `optimize` only reads `startingSlots`, so a shim restricts it to the
     // slots that are still open.
-    const sub = optimize({ startingSlots: freeIdx.map(i => allSlots[i]) },
-                         movable, positions);
+    const freeRules = { startingSlots: freeIdx.map(i => allSlots[i]) };
 
-    const filled = new Array(allSlots.length).fill(null);
-    for (const [i, pid] of pinned) filled[i] = pid;
-    sub.slots.forEach((s, k) => { filled[freeIdx[k]] = s.player_id; });
+    // Fit a chosen set of starters into the open slots, or null if they can't
+    // all be placed legally. The tiny bonus makes a zero-point player (on a
+    // bye, say) still count as placed rather than left out.
+    const arrange = (set) => {
+      const pts = {};
+      for (const pid of set) if (!pinnedIds.has(pid)) pts[pid] = (weekPts[pid] || 0) + 1e-3;
+      const lu = optimize(freeRules, pts, positions);
+      if (lu.starterIds().length !== Object.keys(pts).length) return null;
+      const filled = new Array(allSlots.length).fill(null);
+      for (const [i, pid] of pinned) filled[i] = pid;
+      lu.slots.forEach((sl, k) => { filled[freeIdx[k]] = sl.player_id; });
+      return filled;
+    };
+    const valueOf = (filled) =>
+      filled.reduce((t, p) => t + (p ? (weekPts[p] || 0) : 0), 0);
+    const isDead = (pid) => !state.projections.hasGame(pid, week)
+      || ['Out', 'IR', 'Doubtful'].includes(state.players.get(pid)?.injury_status);
 
-    const startersSet = new Set(filled.filter(Boolean));
+    /* ---- start / sit ----
+     * One swap at a time, each made against the lineup the previous swap left.
+     * Every step is therefore a move you can actually make in Sleeper, in that
+     * order, and the lineup card is simply where the steps end up. Pairing the
+     * optimal lineup against the current one instead breaks on chains (a TE
+     * into the TE slot pushes the old TE to FLEX and a WR out), which showed
+     * up as phantom "empty slot" moves while a player on bye stayed in.
+     */
+    let prev = currentStarters.slice(0, allSlots.length)
+      .map(p => (p && p !== '0' && onRoster.has(p)) ? p : null);
+    while (prev.length < allSlots.length) prev.push(null);
+    const startTotal = valueOf(prev);
+    const accepted = [];
+    const misses = new Map();      // `${in}|${out}` -> best near-miss swap
+
+    for (let guard = 0; guard <= allSlots.length; guard++) {
+      const S = new Set(prev.filter(Boolean));
+      const base = valueOf(prev);
+      const bench = [...onRoster].filter(p => !S.has(p) && !isLocked(p));
+      const outs = [...S].filter(p => !pinnedIds.has(p));
+      const emptyAt = prev.findIndex((p, i) => !p && !pinned.has(i));
+      let best = null;
+      for (const e of bench) {
+        const ePos = positions[e];
+        for (const l of emptyAt >= 0 ? [null, ...outs] : outs) {
+          // Simplest case first: he takes the departing player's exact slot,
+          // so nobody else has to move.
+          let filled = null;
+          const idx = l ? prev.indexOf(l) : emptyAt;
+          if (idx >= 0 && eligible(allSlots[idx]).includes(ePos)) {
+            filled = prev.slice(); filled[idx] = e;
+          } else {
+            const next = new Set(S); if (l) next.delete(l); next.add(e);
+            filled = arrange(next);
+          }
+          if (!filled) continue;
+          const g = r2(valueOf(filled) - base);
+          const forced = !l || isDead(l);
+          const ok = g >= floor.startSit || (forced && g > 0.05);
+          if (ok) {
+            if (!best || g > best.g) best = { e, l, g, forced, filled, idx };
+          } else if (g >= COIN_FLIP_MIN) {
+            const k = `${e}|${l}`;
+            if (!misses.has(k) || misses.get(k).g < g)
+              misses.set(k, { e, l, g, forced: false, filled });
+          }
+        }
+      }
+      if (!best) break;
+      // Anyone already in the lineup who has to change slot to make room.
+      best.shifts = [];
+      best.filled.forEach((pid, i) => {
+        if (!pid || pid === best.e) return;
+        const was = prev.indexOf(pid);
+        if (was >= 0 && allSlots[was] !== allSlots[i])
+          best.shifts.push({ pid, from: allSlots[was], to: allSlots[i] });
+      });
+      accepted.push(best);
+      prev = best.filled;
+    }
+
+    // The near misses that are still open against the final lineup become
+    // coin-flip items, never plan steps. One per player, best first.
+    const finalSet = new Set(prev.filter(Boolean));
+    const usedIn = new Set(), usedOut = new Set();
+    const nearMisses = [...misses.values()]
+      .filter(m => !finalSet.has(m.e) && m.l && finalSet.has(m.l))
+      .sort((x, y) => y.g - x.g)
+      .filter(m => {
+        if (usedIn.has(m.e) || usedOut.has(m.l)) return false;
+        usedIn.add(m.e); usedOut.add(m.l); return true;
+      })
+      .slice(0, 3);
+
+    const startersSet = new Set(prev.filter(Boolean));
+    const finalFilled = prev;
     lineup = {
       slots: allSlots.map((slot, i) => ({
-        slot, player_id: filled[i],
-        points: r2(filled[i] ? (weekPts[filled[i]] || 0) : 0),
-        locked: filled[i] ? isLocked(filled[i]) : false,
+        slot, player_id: finalFilled[i],
+        points: r2(finalFilled[i] ? (weekPts[finalFilled[i]] || 0) : 0),
+        locked: finalFilled[i] ? isLocked(finalFilled[i]) : false,
       })),
       bench: Object.entries(rosterWeek)
         .filter(([pid]) => !startersSet.has(pid))
         .map(([pid, pts]) => [pid, r2(pts)])
         .sort((a, b) => b[1] - a[1]),
-      total: r2(allSlots.reduce((s, _, i) => s + (filled[i] ? (weekPts[filled[i]] || 0) : 0), 0)),
-      starterIds: () => filled.filter(Boolean),
+      total: r2(valueOf(finalFilled)),
+      starterIds: () => finalFilled.filter(Boolean),
     };
-
-    const currentTotal = r2(currentStarters.reduce((s, p) => s + (weekPts[p] || 0), 0));
-    lineupGain = r2(lineup.total - currentTotal);
-    // Nothing movable is left, so there is nothing to advertise.
-    if (!freeIdx.length) lineupGain = 0;
+    lineupGain = freeIdx.length ? r2(lineup.total - startTotal) : 0;
     lineupLocked = !freeIdx.length;
     movableCount = freeIdx.length;
+    // What a full re-shuffle would add on top, for the "not worth it" note.
+    const movable = {};
+    for (const pid of onRoster) if (!isLocked(pid)) movable[pid] = weekPts[pid] || 0;
+    const ideal = optimize(freeRules, movable, positions).total
+      + [...pinnedIds].reduce((t, p) => t + (weekPts[p] || 0), 0);
+    lineupUnclaimed = Math.max(0, r2(ideal - lineup.total));
 
-    /* ---- start / sit ---- */
-    const optimalIds = new Set(lineup.starterIds());
-    const currentIds = new Set(currentStarters.filter(p => p && p !== '0'));
-    const entering = [...optimalIds].filter(p => !currentIds.has(p));
-    const leaving = [...currentIds].filter(p => !optimalIds.has(p))
-                                   .sort((a, b) => (weekPts[a] || 0) - (weekPts[b] || 0));
-    const handled = new Set();
+    const slotOf = (filled, pid) => allSlots[filled.indexOf(pid)] || '';
+    const pairs = [
+      ...accepted.map(x => [x.e, x.l, slotOf(x.filled, x.e), x.g, x.forced, x.shifts, false,
+                            x.l ? null : startersBefore[x.idx]]),
+      ...nearMisses.map(x => [x.e, x.l, slotOf(x.filled, x.e), x.g, false, [], true]),
+    ];
 
-    // Pair each incoming player with the one he actually displaces, by slot.
-    // Zipping the lists by index pairs unrelated players — it will cheerfully
-    // tell you to start a QB "over" a tight end.
-    const pairs = [];
-    lineup.slots.forEach((slot, i) => {
-      const newPid = slot.player_id;
-      if (!newPid || !entering.includes(newPid)) return;
-      let here = currentStarters[i];
-      if (here === '0' || here === '') here = null;
-      let outPid = null;
-      if (here && leaving.includes(here) && !handled.has(here)) {
-        outPid = here;                       // he literally held this slot
-      } else {
-        const elig = eligible(slot.slot);
-        const opts = leaving.filter(x => !handled.has(x)
-                        && elig.includes(state.players.get(x)?.position));
-        if (opts.length) outPid = opts.reduce((a, b) =>
-          (weekPts[b] || 0) < (weekPts[a] || 0) ? b : a);
-      }
-      if (outPid) handled.add(outPid);
-      pairs.push([newPid, outPid, slot.slot]);
-    });
-
-    for (const [newPid, outPid, slotName] of pairs) {
+    for (const [newPid, outPid, slotName, gain, forced, shifts, nearMiss, heldBy] of pairs) {
+      // An empty slot an earlier step emptied is named after its last owner.
+      const was = heldBy && vacatedBy.has(heldBy)
+        ? ` in place of ${state.players.name(heldBy)} (${vacatedBy.get(heldBy)} above)` : '';
       const np = state.players.get(newPid);
       const op = outPid ? state.players.get(outPid) : null;
       const inPts = weekPts[newPid] || 0;
       const outPts = outPid ? (weekPts[outPid] || 0) : 0;
-      const gain = r2(inPts - outPts);
+      const shiftText = shifts.map(x => `${state.players.name(x.pid)} moves from ${x.from} to ${x.to}`).join(', ');
 
       let driver = '', tail = '';
       if (op && !state.projections.hasGame(outPid, week)) {
@@ -261,8 +575,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
       // A swap closes at the earlier of the two kickoffs — whoever plays first
       // locks first, and after that the other can't be moved into his slot.
       const dl = swapDeadline(state.kickoffs || new Map(), np?.team, op?.team);
-      const at = (d) => d.toLocaleString(undefined,
-        { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+      const fromAdd = added.has(newPid);
 
       const why = [];
 
@@ -339,13 +652,24 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
       // A swap whose window has already shut is not advice, it is a regret.
       if (dl && dl.locked) continue;
 
+      if (fromAdd) {
+        const tm = addTiming.get(newPid);
+        const q = pronouns(np?.position);
+        why.unshift({ h: 'Do this after the pickup', t: tm?.instant
+          ? `${np?.name} is not on your roster until you add ${q.obj} in the step above. Add first, then set the lineup.`
+          : `${np?.name} arrives when waivers run (${nextWaiver}). Once the claim goes through, put ${q.obj} in this slot before ${q.poss} game.` });
+      }
+
       actions.push({
         kind: 'start_sit',
         headline: `START ${np?.name ?? newPid} at ${slotName}`
-                  + (op ? ` over ${op.name}` : ' (empty slot)') + tail,
-        detail: `${inPts.toFixed(1)} proj vs ${outPts.toFixed(1)} — +${gain.toFixed(1)} pts in week ${week}`,
+                  + (op ? ` over ${op.name}` : was || ' (empty slot)') + tail,
+        detail: (fromAdd ? 'Once the pickup above goes through. ' : '')
+          + `${inPts.toFixed(1)} proj vs ${outPts.toFixed(1)} — +${gain.toFixed(1)} pts in week ${week}`
+          + (shiftText ? `. To make room, ${shiftText}.` : ''),
         payload: { player_id: newPid, slot: slotName, bench: outPid, gain,
-                   injury_in: inInj, injury_out: outInj },
+                   injury_in: inInj, injury_out: outInj, after_add: fromAdd,
+                   forced, near_miss: nearMiss },
         injury_driven: injured.length > 0,
         impact: gain, per_week: gain, weight: gain * URGENCY.lineup,
         unit: 'week', confidence: op
@@ -362,19 +686,17 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     }
 
     // Starters with no viable replacement — a warning, not a swap.
-    for (const pid of new Set([...optimalIds, ...currentIds])) {
-      if (handled.has(pid) || !currentIds.has(pid)) continue;
+    for (const pid of startersSet) {
+      if (isLocked(pid) || !isDead(pid)) continue;
       const p = state.players.get(pid);
       if (!p) continue;
       const onBye = !state.projections.hasGame(pid, week);
-      const hurt = ['Out', 'IR', 'Doubtful'].includes(p.injury_status);
-      if (!onBye && !hurt) continue;
       const label = onBye ? `on BYE in week ${week}` : p.injury_status;
       actions.push({
         kind: 'alert',
         headline: `${p.name} is ${label} and is in your lineup`,
-        detail: 'They will score zero. Nothing on your bench beats them outright, '
-              + 'so look at the waiver wire.',
+        detail: 'They will score zero. Nothing on your bench can fill the slot, '
+              + 'and no free agent cleared the bar, so this one stays.',
         payload: { player_id: pid },
         impact: 0, per_week: 0, weight: 7,
         horizon: `Before week ${week} kickoff`,
@@ -383,54 +705,41 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
             `${p.name} takes a zero in a starting slot. In a ${rules.numTeams}-team `
             + `league that is usually the difference in a weekly matchup.` },
           { h: 'Why no swap is offered', t:
-            'No player on your bench projects higher in a slot they are eligible '
-            + 'for, so there is no free fix — the answer is on the waiver wire.' },
+            'No player on your bench is eligible for that slot, so there is no '
+            + 'free fix. The waiver wire is the only way out.' },
         ],
       });
     }
 
-    /* ---- waivers ---- */
-    onProgress('Ranking the waiver wire…');
-    faabLeft = Math.max(0, rules.waiverBudget - me.waiver_budget_used);
-    let trending = {};
-    try {
-      for (const t of (await Sleeper.trending('add', 24, 200)) || [])
-        trending[String(t.player_id)] = t.count;
-    } catch {}
-
-    waivers = recommendWaivers(state, ros, weekPts, levels, trending, 5);
-    drops = dropCandidates(state, ros, 8, weekPts);
-
-    for (const w of waivers) {
-      const cost = rules.usesFaab && w.faab_bid
-        ? ` — bid $${w.faab_bid} (${w.faab_pct.toFixed(0)}% of your $${faabLeft})`
-        : (!rules.usesFaab && me.waiver_position
-           ? ` — uses your #${me.waiver_position} waiver priority` : '');
-      const perWeek = w.net_gain / weeksLeft;
-      actions.push({
-        kind: 'waiver',
-        headline: `CLAIM ${w.name} (${w.position}-${w.team})${cost}`
-                  + (w.drop_id ? `, drop ${w.drop_name}` : ''),
-        detail: w.rationale,
-        payload: {
-          player_id: w.player_id, bid: w.faab_bid, drop_id: w.drop_id,
-          net_gain: w.net_gain, marginal_week: w.marginal_week,
-          alternatives: w.alternatives.map(a => ({
-            label: `${a.name} (${a.position}-${a.team})`, bid: a.faab_bid,
-            net_gain: a.net_gain, drop_name: a.drop_name, detail: a.rationale,
-          })),
-        },
-        impact: w.net_gain, per_week: r2(perWeek), unit: 'ros',
-        weight: perWeek * URGENCY.waiver,
-        horizon: `Waivers run ${nextWaiver}`, reasoning: w.reasoning,
-      });
+    // Claims that land after this week's games still happen. Trades are
+    // planned against the roster you will have once they do.
+    for (const [pid, tm] of addTiming) {
+      if (tm.helpsThisWeek) continue;
+      const w = waivers.find(x => x.player_id === pid);
+      // The player being cut can still be in this week's lineup, since the
+      // claim only goes through after his game. Say so, or the two steps look
+      // like they disagree.
+      if (w?.drop_id && startersSet.has(w.drop_id)) {
+        const a = actions.find(x => x.kind === 'waiver' && x.payload.player_id === pid);
+        const dn = state.players.name(w.drop_id);
+        const q = pronouns(state.players.get(w.drop_id)?.position);
+        if (a) {
+          a.detail = `${dn} still starts for you this week. ${q.Subj} only leaves when the claim goes through. ` + a.detail;
+          a.reasoning.unshift({ h: `Why ${dn} is in your lineup and also being dropped`, t:
+            `Claims process ${nextWaiver}, after this week's games. Until then `
+            + `${dn} is still yours and still your best option in that slot, so `
+            + `start ${q.obj} this week and let the claim replace ${q.obj} after.` });
+        }
+      }
+      applyMoves(me, { add: [pid], drop: w?.drop_id ? [w.drop_id] : [] });
     }
 
     /* ---- trades ---- */
     onProgress('Searching every roster for trades…');
     // Search below the display floor so long-shot ideas can still surface
     // in the speculative list rather than never being built.
-    trades = findTrades(state, ros, levels, { limit: 8, minMyGain: floor.tradeGain });
+    trades = findTrades(state, ros, levels, { limit: 8, minMyGain: floor.tradeGain,
+                                               keep: added });
     if (!trades.length) {
       const chips = tradeChips(state, ros, levels, 2)
         .map(([pid]) => state.players.name(pid));
@@ -533,45 +842,9 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     }
   }
 
-  /* ---- alerts from change detection ---- */
-  const INFO_WEIGHT = { 'critical:true': 5, 'critical:false': 2.2,
-                        'high:true': 1.9, 'high:false': 0.9 };
-  for (const c of changes) {
-    if (c.severity !== 'critical' && c.severity !== 'high') continue;
-    actions.push({
-      kind: 'alert', headline: c.headline, detail: c.detail,
-      payload: { category: c.category, affects_me: c.affects_me },
-      impact: 0, per_week: 0,
-      weight: INFO_WEIGHT[`${c.severity}:${Boolean(c.affects_me)}`] ?? 0.8,
-      horizon: 'Reacting early is the edge',
-      reasoning: [{ h: 'Why you are seeing this', t:
-        (c.affects_me ? 'This touches your own roster. '
-                      : 'This is league news that may open an opportunity. ')
-        + (c.detail || c.headline)
-        + ' Detected by comparing the league against your last visit.' }],
-    });
-  }
-
-  // Drop moves whose edge is too small to be worth acting on. Warnings stay:
-  // a bye week is a certainty, not a projected edge.
-  const belowFloor = (a) => {
-    if (a.kind === 'start_sit') return a.impact < floor.startSit;
-    if (a.kind === 'waiver') return a.per_week < floor.waiverPerWeek;
-    if (a.kind === 'trade') return a.impact < floor.tradeGain;
-    return false;
-  };
-  // High upside, low certainty. Worth seeing, but not alongside the calls that
-  // are simply correct.
-  const isSpeculative = (a) => {
-    if (a.kind === 'trade') {
-      return a.payload?.acceptance === 'long shot' && a.impact >= SPECULATIVE_TRADE_GAIN;
-    }
-    if (a.kind === 'waiver') {
-      // Does nothing for you this week, but could pay off across the season.
-      return (a.payload?.marginal_week ?? 1) < 0.5 && a.impact >= SPECULATIVE_STASH_GAIN;
-    }
-    return false;
-  };
+  // League news (adds, drops, status changes) lives on the Activity tab.
+  // It is context, not a step, and the plan already reacts to the parts of
+  // it that touch your lineup.
 
   // A start/sit inside the error band is not a recommendation, it is a coin
   // flip. Rather than hide it or assert it, hand it over with whatever
@@ -580,6 +853,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
   for (const a of actions) {
     if (a.kind !== 'start_sit') continue;
     if (a.impact >= floor.startSit || a.impact < COIN_FLIP_MIN) continue;
+    if (a.payload?.forced) continue;
     const inId = a.payload.player_id;
     const outId = a.payload.bench;
     if (!outId) continue;
@@ -618,48 +892,19 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
   speculative.sort((a, b) => b.impact - a.impact);
   speculative.forEach(a => { a.bucket = bucketOf(a.kind); });
 
-  // The lineup card is titled "Recommended lineup", so it has to show the
-  // lineup we actually recommend. Showing the theoretical optimum instead put
-  // a START HIM tag on a 0.1 point swap that every other part of the app had
-  // just decided was not worth making.
-  if (me && lineup) {
-    const recommendedSwaps = actions.filter(a => a.kind === 'start_sit' && a.payload?.bench);
-    const slots = rules.startingSlots;
-    const filled = slots.map((_, i) => {
-      const pid = currentStarters[i];
-      return pid && pid !== '0' ? pid : null;
-    });
-    for (const a of recommendedSwaps) {
-      const out = a.payload.bench;
-      const idx = filled.indexOf(out);
-      if (idx >= 0) filled[idx] = a.payload.player_id;
-    }
-    // A slot the current lineup left empty still gets the best legal option.
-    lineup.slots.forEach((s, i) => { if (!filled[i] && s.player_id) filled[i] = s.player_id; });
-
-    const started = new Set(filled.filter(Boolean));
-    const rosterWeek = {};
-    for (const pid of me.activePlayers()) rosterWeek[pid] = weekPts[pid] || 0;
-    lineup = {
-      slots: slots.map((slot, i) => ({
-        slot, player_id: filled[i],
-        points: r2(filled[i] ? (weekPts[filled[i]] || 0) : 0),
-        locked: filled[i] ? Boolean(lineup.slots[i]?.locked) : false,
-      })),
-      bench: Object.entries(rosterWeek)
-        .filter(([pid]) => !started.has(pid))
-        .map(([pid, pts]) => [pid, r2(pts)])
-        .sort((a, b) => b[1] - a[1]),
-      total: r2(slots.reduce((s, _, i) => s + (filled[i] ? (weekPts[filled[i]] || 0) : 0), 0)),
-      starterIds: () => filled.filter(Boolean),
-    };
-    // Keep the headline number honest against the lineup now on screen.
-    const currentTotal = r2(currentStarters.reduce((s, p) => s + (weekPts[p] || 0), 0));
-    lineupGain = r2(lineup.total - currentTotal);
-  }
-
-  // One scale: points at stake, weighted by how soon the chance to act goes.
-  actions.sort((a, b) => b.weight - a.weight);
+  // Numbered in the order you do them. Roster fixes unblock everything else;
+  // lineup swaps on players you already have are free and go next; then the
+  // pickups, then the lineup changes that need those pickups, then anything
+  // to keep an eye on, then offers, which take days anyway. Within a stage the
+  // bigger move goes first.
+  const stageOf = (a) => {
+    if (a.kind === 'roster') return 0;
+    if (a.kind === 'start_sit') return a.payload?.after_add ? 3 : 1;
+    if (a.kind === 'waiver') return 2;
+    if (a.kind === 'alert') return 4;
+    return 5;
+  };
+  actions.sort((a, b) => (stageOf(a) - stageOf(b)) || (b.weight - a.weight));
   actions.forEach((a, i) => {
     a.rank = i + 1;
     const t = tierOf(a.weight);
@@ -694,6 +939,8 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
   actions.forEach(a => ['player_id', 'bench', 'drop_id'].forEach(k => collect(a.payload?.[k])));
   trades.forEach(t => [...t.send, ...t.receive].forEach(collect));
   drops.forEach(d => collect(d.player_id));
+  if (rosterFix) [...rosterFix.toIR, ...rosterFix.activate,
+                  ...rosterFix.drops.map(d => d.player_id)].forEach(collect);
 
   return {
     generated_at: new Date().toISOString(),
@@ -702,8 +949,10 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     record: me ? me.record : '-',
     settings_summary: rules.describe(),
     lineup, current_starters: currentStarters, lineup_gain: lineupGain,
+    lineup_unclaimed: lineupUnclaimed,
     lineup_locked: lineupLocked, movable_slots: movableCount,
     actions, waivers, drops, trades, changes, trade_note: tradeNote,
+    roster_fix: rosterFix,
     faab_left: faabLeft, next_waiver: nextWaiver, deadlines,
     thresholds: floor,
     speculative,
@@ -724,5 +973,7 @@ export async function assemble(state, { onProgress = () => {} } = {}) {
     waiver_position: me ? me.waiver_position : 0,
     player_names: names,
     _state: state,
+    // Kept for the offer analyser, which re-runs the maths on demand.
+    _ros: ros, _levels: levels, _weekPts: weekPts, _isLocked: isLocked,
   };
 }

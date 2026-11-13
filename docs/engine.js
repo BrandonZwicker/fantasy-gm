@@ -104,8 +104,10 @@ const eligible = (slot) => SLOT_ELIGIBILITY[slot] || [slot];
 
 /* ---------------- league rules ---------------- */
 
-const WAIVER_DAYS = ['Tuesday', 'Wednesday', 'Thursday', 'Friday',
-                     'Saturday', 'Sunday', 'Monday'];
+// Sleeper counts the waiver day from Monday: a league set to 2 processes its
+// claims early Wednesday morning, which is what its transaction log shows.
+const WAIVER_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+                     'Saturday', 'Sunday'];
 
 function dot(stats, weights) {
   let total = 0;
@@ -165,6 +167,20 @@ export class LeagueRules {
   get startingSlots() { return this.rosterPositions.filter(p => !NON_STARTING.has(p)); }
   get benchSlots() { return this.rosterPositions.filter(p => p === 'BN').length; }
   get irSlots() { return this.rosterPositions.filter(p => p === 'IR').length; }
+  /** Sleeper keeps IR capacity in settings, not in roster_positions. */
+  get reserveSlots() { return this.settings.reserve_slots ?? this.irSlots; }
+  /** Injury designations this league lets you park on IR. */
+  get irEligible() {
+    const s = new Set(['IR', 'PUP']);
+    const st = this.settings;
+    if (st.reserve_allow_out) s.add('Out');
+    if (st.reserve_allow_doubtful) s.add('Doubtful');
+    if (st.reserve_allow_sus) s.add('Sus');
+    if (st.reserve_allow_na) s.add('NA');
+    if (st.reserve_allow_dnr) s.add('DNR');
+    if (st.reserve_allow_cov) s.add('COV');
+    return s;
+  }
   get taxiSlots() { return this.settings.taxi_slots || 0; }
   get rosterSize() {
     return this.rosterPositions.filter(p => p !== 'IR' && p !== 'TAXI').length;
@@ -234,18 +250,25 @@ export class LeagueRules {
     return out;
   }
 
-  nextWaiverRun() {
-    if (this.waiverType === 'none') return 'No waivers — free agents are first-come';
+  /** When the next waiver run happens, as a Date (null if no waivers). */
+  nextWaiverRunAt(now = new Date()) {
+    if (this.waiverType === 'none') return null;
     const dayName = WAIVER_DAYS[this.waiverDayOfWeek % 7];
     const idx = { Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4,
                   Friday: 5, Saturday: 6, Sunday: 0 }[dayName];
-    const now = new Date();
     let delta = (idx - now.getDay() + 7) % 7;
     if (delta === 0 && now.getHours() >= 3) delta = 7;
     const run = new Date(now);
     run.setDate(now.getDate() + delta);
     run.setHours(3, 0, 0, 0);
-    const hrs = (run - now) / 3.6e6;
+    return run;
+  }
+
+  nextWaiverRun() {
+    const run = this.nextWaiverRunAt();
+    if (!run) return 'No waivers — free agents are first-come';
+    const dayName = WAIVER_DAYS[this.waiverDayOfWeek % 7];
+    const hrs = (run - new Date()) / 3.6e6;
     return `${dayName} ~3am (${Math.round(hrs)}h away)`;
   }
 }
@@ -424,7 +447,9 @@ export class PlayerIndex {
       if (hit) {
         p.playProb = hit.probability;
         p.injuryReason = hit.reason;
-        p.injuryNote = hit.shortNote || hit.note || '';
+        // ESPN keeps cleared players on its report with a game recap as the
+        // note. That is not an injury, so it never becomes one here.
+        if (hit.probability < 0.95) p.injuryNote = hit.shortNote || hit.note || p.injuryNote;
         p.injuryStatusNews = hit.status;
         // News supersedes the Sleeper tag, which is coarser and often stale.
         p.availability = hit.probability;
@@ -618,7 +643,10 @@ export class LeagueState {
         roster_id: r.roster_id, owner_id: r.owner_id,
         label: shown, handle: anonymize && !mine ? '' : handle,
         players: (r.players || []).map(String),
-        starters: (r.starters || []).filter(p => p && p !== '0').map(String),
+        // Kept slot-aligned: an empty slot stays as '0' so index i is always
+        // starting slot i. Filtering it out shifted every later starter one
+        // slot to the left.
+        starters: (r.starters || []).map(p => (p && p !== '0') ? String(p) : '0'),
         reserve: (r.reserve || []).map(String),
         taxi: (r.taxi || []).map(String),
         wins: st.wins || 0, losses: st.losses || 0, ties: st.ties || 0,

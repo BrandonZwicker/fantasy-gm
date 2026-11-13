@@ -13,8 +13,8 @@ const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.ge
                    + `T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
 const esc = (s) => String(s).replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
 
-// Sleeper stores waiver day as 0 = Tuesday … 6 = Monday.
-const WAIVER_DAY_TO_JS = [2, 3, 4, 5, 6, 0, 1];
+// Sleeper stores waiver day as 0 = Monday … 6 = Sunday. JS counts from Sunday.
+const WAIVER_DAY_TO_JS = [1, 2, 3, 4, 5, 6, 0];
 
 export const LEAD_TIMES = [
   { id: '1h',  label: '1 hour before',  minutes: 60 },

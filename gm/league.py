@@ -70,7 +70,8 @@ class LeagueState:
                 display_name=u.get("display_name", "unknown"),
                 team_name=(u.get("metadata") or {}).get("team_name", ""),
                 players=[str(p) for p in (r.get("players") or [])],
-                starters=[str(p) for p in (r.get("starters") or []) if p and p != "0"],
+                # Slot-aligned: an empty slot stays '0' so index i is slot i.
+                starters=[str(p) if p and p != "0" else "0" for p in (r.get("starters") or [])],
                 reserve=[str(p) for p in (r.get("reserve") or [])],
                 taxi=[str(p) for p in (r.get("taxi") or [])],
                 wins=st.get("wins", 0), losses=st.get("losses", 0), ties=st.get("ties", 0),

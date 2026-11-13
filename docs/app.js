@@ -4,8 +4,9 @@ import { Sleeper } from './engine.js';
 import { assemble, buildReport, refine } from './report.js';
 import { EXAMPLE, PLATFORMS } from './providers.js';
 import { EVENT_KINDS, LEAD_TIMES, downloadICS } from './reminders.js';
-import { buildSVG, svgToPng } from './proposal.js';
+import { buildCase, buildKeyPoints, buildSVG, svgToPng } from './proposal.js';
 import { pronouns } from './engine.js';
+import { analyzeOffer } from './advice.js';
 
 const KEY = 'fantasy-gm.session';
 const PREF = 'fantasy-gm.prefs';
@@ -14,11 +15,13 @@ const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); 
 const drop = (k) => { try { localStorage.removeItem(k); } catch {} };
 
 let SESSION = readJSON(KEY);
-let PREFS = { mode: 'tabs', tab: 'overview',
+let PREFS = { mode: 'tabs', tab: 'overview', tradeView: 'sent',
               remind: ['waivers', 'kickoff'], lead: '3h',
               ...(readJSON(PREF) || {}) };
 let REPORT = null;
 let STATE = null;
+// The offer being analysed on the Trades tab. Survives re-renders.
+let OFFER = { partner: null, give: [], get: [], result: null };
 
 const node = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstChild; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -151,8 +154,12 @@ function renderGate(msg) {
 
 /* ================= dashboard pieces ================= */
 
-function actionHTML(a) {
-  const alts = a.payload?.alternatives || [];
+// What kind of step each item is, in the words you would use in the app.
+const STAGE_LABEL = { roster: 'Roster', start_sit: 'Lineup', waiver: 'Pickup',
+                      alert: 'Heads up', trade: 'Offer' };
+
+function actionHTML(a, { showAlts = true } = {}) {
+  const alts = showAlts ? (a.payload?.alternatives || []) : [];
   const why = a.reasoning || [];
   const dl = a.deadline;
   // An injury-driven swap is a different kind of decision from a projection
@@ -190,8 +197,9 @@ function actionHTML(a) {
     <div class="line">
       <span class="rk ${a.priority === 1 ? 'urgent' : a.rank <= 2 ? 'lead' : ''}"
             title="${a.priority === 1 ? 'High priority' : ''}">${a.rank}</span>
-      ${a.injury_driven ? '<span class="chip injury">Injury call</span>' : ''}
-      <div class="actbody"><h4>${esc(a.headline)}</h4>
+      <div class="actbody"><div class="stagerow"><span class="chip stage ${esc(a.kind)}">${esc(STAGE_LABEL[a.kind] || '')}</span>
+        ${a.injury_driven ? '<span class="chip injury">Injury call</span>' : ''}</div>
+        <h4>${esc(a.headline)}</h4>
         ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}</div>
     </div>
     <div class="meta-row">${pts}${rate}${conf}${check}
@@ -223,15 +231,17 @@ const CARDS = {
     }
     // A gain that exists but sits under the threshold is noise, not an
     // opportunity — say so rather than dangling a number we won't act on.
-    const marginal = !up && r.lineup_gain > 0.1;
+    const marginal = !up && (r.lineup_unclaimed ?? 0) > 0.1;
     return `<div class="hero">
       <div class="fig ${up ? '' : 'flat'}">${up ? '+' + r.lineup_gain.toFixed(1) : '✓'}</div>
       <div class="say">
-        <h2>${up ? 'Points left on your bench'
+        <h2>${r.roster_fix?.over_by > 0 ? `You are ${r.roster_fix.over_by} over the roster limit`
+             : up ? 'Points left on your bench'
                  : marginal ? 'Lineup is good enough'
                  : 'Your lineup is set correctly'}</h2>
-        <p>${up ? `Fixing your week ${r.week} lineup is worth ${r.lineup_gain.toFixed(1)} more projected points.`
-             : marginal ? `The best change available is worth ${r.lineup_gain.toFixed(1)} points, which is inside the projection noise, so it is not worth the move.`
+        <p>${r.roster_fix?.over_by > 0 ? `Sleeper won't process an add, claim or trade until that's fixed. Step 1 below sorts it${up ? `, and the lineup steps after it add ${r.lineup_gain.toFixed(1)} projected points` : ''}.`
+             : up ? `Fixing your week ${r.week} lineup is worth ${r.lineup_gain.toFixed(1)} more projected points.`
+             : marginal ? `Another ${r.lineup_unclaimed.toFixed(1)} points exist on paper, but they are inside the projection noise, so they are not worth the move.`
              : `Nothing to change for week ${r.week}. The optimal starters are already in.`}${
              r.movable_slots && r.movable_slots < (r.lineup?.slots.length || 0)
                ? ` ${r.movable_slots} of ${r.lineup.slots.length} slots are still movable, the rest have kicked off.`
@@ -246,13 +256,10 @@ const CARDS = {
   },
 
   actions(r) {
-    const ORDER = ['lineup', 'waivers', 'trades'];
-    const grouped = ORDER
-      .map(k => [k, r.actions.filter(a => (a.bucket || 'lineup') === k)])
-      .filter(([, list]) => list.length);
-    const groupsHTML = grouped.map(([k, list]) => `
-      <div class="grp"><div class="grp-h">${esc(r.buckets?.[k] || k)}</div>
-        ${list.map(actionHTML).join('')}</div>`).join('');
+    // One list, in the order you do it. Each step already assumes the ones
+    // above it are done, so there is nothing to choose between here.
+    const groupsHTML = `<div class="plan">${r.actions.map(a =>
+      actionHTML(a, { showAlts: false })).join('')}</div>`;
 
     const held = r.held_back
       ? `<details class="heldback"><summary>${r.held_back} move${r.held_back > 1 ? 's' : ''} too small to be worth making</summary>
@@ -266,7 +273,7 @@ const CARDS = {
       : `<div class="allclear"><span class="big">All clear</span>
          No moves worth making right now. Check back after the next games.</div>${held}`;
     return `<div class="card"><header><h3>The decision room</h3>
-      <span class="note">${r.actions.length} item${r.actions.length === 1 ? '' : 's'} · numbered by how much is at stake, grouped by when you lose the chance</span></header>
+      <span class="note">${r.actions.length} step${r.actions.length === 1 ? '' : 's'} · do them in this order, each one assumes the last is done</span></header>
       <div class="in">${body}</div></div>`;
   },
 
@@ -325,8 +332,8 @@ const CARDS = {
 
   waivers(r) {
     const rows = r.waivers.length ? r.waivers.map(w => `
-      <tr><td class="cost ${r.uses_faab ? '' : 'pri'}">${
-          r.uses_faab ? (w.faab_bid ? '$' + w.faab_bid : '—') : '#' + (r.waiver_position || '—')}</td>
+      <tr><td class="cost ${r.uses_faab && !w.instant ? '' : 'pri'}">${
+          w.instant ? 'FA' : r.uses_faab ? (w.faab_bid ? '$' + w.faab_bid : '—') : '#' + (r.waiver_position || '—')}</td>
         <td class="who"><b>${esc(w.name)}</b><span>${esc(w.position)}${w.team ? ' · ' + esc(w.team) : ''}</span>
           ${w.drop_id ? `<span class="sub2">drop ${esc(w.drop_name)}</span>` : ''}
           ${w.alternatives.length ? `<span class="sub2">or ${w.alternatives.map(a => esc(a.name)).join(', ')}</span>` : ''}</td>
@@ -340,12 +347,38 @@ const CARDS = {
   },
 
   drops(r) {
-    const rows = r.drops.slice(0, 6).map(d => `
-      <tr><td class="who">${who(d.player_id)}</td>
+    const fix = r.roster_fix;
+    const name = (id) => esc(pinfo(id).name);
+    let banner = '';
+    if (fix?.needed && (fix.over_by > 0 || fix.activate.length)) {
+      const steps = [
+        ...fix.activate.map(id => `Activate ${name(id)} from IR`),
+        ...fix.toIR.map(id => `Move ${name(id)} to IR`),
+        ...fix.drops.map(d => `Drop ${name(d.player_id)}`),
+      ];
+      banner = `<div class="overlimit">
+        <b>${fix.active_count} players on a ${fix.limit}-man roster.</b>
+        ${fix.over_by > 0 ? `You need to clear ${fix.over_by}.` : ''}
+        <ol>${steps.map(x => `<li>${x}</li>`).join('')}</ol>
+        ${fix.toIR.length && !fix.drops.length
+          ? `<p>No one has to be cut. IR spots don't count against the limit.</p>` : ''}
+      </div>`;
+    } else if (fix?.toIR.length) {
+      banner = `<div class="overlimit calm">You're under the limit. ${fix.toIR.map(name).join(' and ')}
+        can still go on IR for a free bench spot.</div>`;
+    }
+    const cut = new Set((fix?.drops || []).map(d => d.player_id));
+    const rows = r.drops.slice(0, 8).map(d => `
+      <tr class="${cut.has(d.player_id) ? 'cutrow' : ''}"><td class="who">${who(d.player_id)}
+          ${cut.has(d.player_id) ? '<span class="movetag out">drop</span>' : ''}
+          ${(fix?.toIR || []).includes(d.player_id) ? '<span class="movetag ir">to IR</span>' : ''}</td>
         <td class="n ${d.cost > 0 ? '' : 'dim'}">${d.cost.toFixed(1)}</td></tr>`).join('');
-    return `<div class="card"><header><h3>Safest drops</h3>
-      <span class="note">points it costs you</span></header>
-      <div class="in"><table>${rows}</table></div></div>`;
+    return `<div class="card"><header><h3>Who to drop</h3>
+      <span class="note">points lost rest of season</span></header>
+      <div class="in">${banner}<table>${rows}</table>
+        <p class="foot">Each player is taken off your roster and your best lineup is
+          re-set without him. The number is what that costs. This week's starters
+          are left off the list.</p></div></div>`;
   },
 
   trades(r) {
@@ -375,8 +408,86 @@ const CARDS = {
           </div></details>` : ''}
         </div>`;
     }).join('') : `<div class="notice">${esc(r.trade_note || 'No mutually beneficial trades right now.')}</div>`;
-    return `<div class="card"><header><h3>Trades worth offering</h3></header>
+    return `<div class="card"><header><h3>Trades to send</h3>
+      <span class="note">both lineups improve</span></header>
       <div class="in">${body}</div></div>`;
+  },
+
+  offers(r) {
+    const st = r._state;
+    if (!st?.me) return '';
+    const pn = (id) => {
+      const p = st.players.get(id);
+      return p ? { name: p.name, pos: p.position, team: p.team || '' } : { name: id, pos: '', team: '' };
+    };
+    const ORDER = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
+    const sorted = (ids) => [...ids].sort((a, b) =>
+      (ORDER.indexOf(pn(a).pos) - ORDER.indexOf(pn(b).pos))
+      || ((r._ros[b] || 0) - (r._ros[a] || 0)));
+    const opps = st.opponents();
+    const partner = OFFER.partner ?? opps[0]?.roster_id;
+    const them = st.teams[partner];
+    const box = (side, id) => {
+      const p = pn(id);
+      const on = OFFER[side].includes(id);
+      return `<label class="pick ${on ? 'on' : ''}"><input type="checkbox" data-side="${side}" value="${esc(id)}" ${on ? 'checked' : ''}>
+        <b>${esc(p.name)}</b><span>${esc(p.pos)}${p.team ? ' · ' + esc(p.team) : ''}</span>
+        <em>${(r._ros[id] || 0).toFixed(0)}</em></label>`;
+    };
+    const res = OFFER.result;
+    const sign = (x) => (x >= 0 ? '+' : '') + x.toFixed(1);
+    const out = !res ? '' : `<div class="verdict ${res.tone}">
+        <div class="vh">${esc(res.verdict)}</div>
+        <p>${res.verdict === 'Accept'
+          ? `Your starting lineup gets ${res.my_gain.toFixed(1)} points better over the rest of the season, which clears the ${res.min_gain}-point bar for a trade.`
+          : res.verdict === 'Too close to call'
+          ? (res.my_gain < 0.05
+              ? `It doesn't change your best lineup over the rest of the season${Math.abs(res.my_week) >= 0.05 ? `, only this week (${sign(res.my_week)})` : ''}. Take it if you like the player, but the numbers don't care.`
+              : `It helps you by ${res.my_gain.toFixed(1)}, under the ${res.min_gain}-point bar. That's inside the projection noise, so on numbers alone it's a coin flip.`)
+          : `Your starting lineup gets ${Math.abs(res.my_gain).toFixed(1)} points worse over the rest of the season.`}</p>
+      </div>
+      <div class="ostats">
+        <div><div class="k">${esc(st.me.label)} ROS</div><div class="v ${res.my_gain >= 0 ? 'up' : 'down'}">${sign(res.my_gain)}</div><div class="s">${sign(res.my_per_week)} / week</div></div>
+        <div><div class="k">${esc(st.me.label)} week ${r.week}</div><div class="v ${res.my_week >= 0 ? 'up' : 'down'}">${sign(res.my_week)}</div><div class="s">this week only</div></div>
+        <div><div class="k">${esc(res.partner_name)} ROS</div><div class="v ${res.their_gain >= 0 ? 'up' : 'down'}">${sign(res.their_gain)}</div><div class="s">their lineup</div></div>
+        <div><div class="k">Value ratio</div><div class="v">${res.value_ratio != null ? res.value_ratio.toFixed(2) + 'x' : '—'}</div><div class="s">you send / you get</div></div>
+      </div>
+      ${res.forced_drops.length || res.forced_ir.length ? `<div class="notice">Taking this leaves your roster over the limit, so it also means
+        ${[...res.forced_ir.map(id => `moving ${esc(pn(id).name)} to IR`),
+           ...res.forced_drops.map(d => `dropping ${esc(d.name.split(' (')[0])} (${d.cost.toFixed(1)} pts)`)].join(' and ')}.
+        That's already counted in the numbers above.</div>` : ''}
+      ${res.their_forced.length ? `<p class="foot">${esc(res.partner_name)} would have to cut
+        ${res.their_forced.map(d => esc(d.name.split(' (')[0])).join(' and ')} to make room.</p>` : ''}
+      ${res.counter ? `<div class="counter"><div class="pkg-pts-h">Counter that clears the bar</div>
+        <p><b>${esc(res.counter.note[0].toUpperCase() + res.counter.note.slice(1))}.</b>
+        You send ${res.counter.give.map(id => esc(pn(id).name)).join(', ') || 'nothing'}, you get
+        ${res.counter.get.map(id => esc(pn(id).name)).join(', ')}. Your lineup ${sign(res.counter.my_gain)},
+        theirs ${sign(res.counter.their_gain)}.</p></div>`
+        : res.verdict !== 'Accept' ? '<p class="foot">No single extra player or removal turns this into a deal worth taking.</p>' : ''}
+      ${res.proposal ? `<details class="pkg" data-offercard>
+        <summary>Analysis card</summary>
+        <div class="pkg-in"><div class="pkg-card" id="pkgcard-offer"></div>
+          <div class="pkg-pts"><div class="pkg-pts-h">Key points</div>
+            <ul>${res.proposal.points.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div></div></details>` : ''}`;
+
+    return `<div class="card"><header><h3>Offers received</h3>
+      <span class="note">enter it as it appears in Sleeper</span></header>
+      <div class="in">
+        <p class="spec-lede">Sleeper keeps pending offers private to your login, so
+          this site can't see them. Pick the team and tick what's in the offer.</p>
+        <div class="ofrom"><span>From</span>
+          <select id="offer-team">${opps.map(t =>
+            `<option value="${t.roster_id}" ${t.roster_id === partner ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select></div>
+        <div class="ocols">
+          <div><div class="olbl">They send you <i>pts left this season</i></div>
+            ${them ? sorted(them.activePlayers()).map(id => box('get', id)).join('') : ''}</div>
+          <div><div class="olbl">You send them <i>pts left this season</i></div>
+            ${sorted(st.me.activePlayers()).map(id => box('give', id)).join('')}</div>
+        </div>
+        <div class="ogo"><button class="btn solid" id="offer-go" ${OFFER.get.length || OFFER.give.length ? '' : 'disabled'}>Analyze offer</button>
+          ${res ? '<button class="btn quiet" id="offer-clear">Clear</button>' : ''}</div>
+        <div id="offer-out">${out}</div>
+      </div></div>`;
   },
 
   activity(r) {
@@ -492,7 +603,13 @@ function tabBody(r, tab) {
   switch (tab) {
     case 'lineup':   return CARDS.lineup(r) + CARDS.closeCalls(r) + CARDS.drops(r);
     case 'waivers':  return CARDS.waivers(r) + CARDS.drops(r);
-    case 'trades':   return CARDS.trades(r) + CARDS.speculative(r);
+    case 'trades': {
+      const v = PREFS.tradeView === 'received' ? 'received' : 'sent';
+      const seg = `<div class="subseg"><div class="seg" id="tradeseg">
+        <button data-tv="sent" class="${v === 'sent' ? 'on' : ''}">Sent</button>
+        <button data-tv="received" class="${v === 'received' ? 'on' : ''}">Received</button></div></div>`;
+      return seg + (v === 'sent' ? CARDS.trades(r) + CARDS.speculative(r) : CARDS.offers(r));
+    }
     case 'activity': return CARDS.activity(r);
     case 'league':   return CARDS.rules(r) + CARDS.reminders(r);
     default:         return CARDS.hero(r) + CARDS.actions(r);
@@ -530,7 +647,7 @@ function render(r, { isExample }) {
   const body = mode === 'all'
     ? `<main>${CARDS.hero(r)}
         <div class="cols">
-          <div>${CARDS.actions(r)}${CARDS.closeCalls(r)}${CARDS.lineup(r)}${CARDS.trades(r)}${CARDS.speculative(r)}</div>
+          <div>${CARDS.actions(r)}${CARDS.closeCalls(r)}${CARDS.lineup(r)}${CARDS.trades(r)}${CARDS.offers(r)}${CARDS.speculative(r)}</div>
           <div>${CARDS.waivers(r)}${CARDS.drops(r)}${CARDS.activity(r)}${CARDS.rules(r)}${CARDS.reminders(r)}</div>
         </div></main>`
     : `<main class="focused">${tabBody(r, tab)}</main>`;
@@ -629,6 +746,8 @@ function render(r, { isExample }) {
     hint('Calendar file downloaded — open it to add the reminders');
   };
 
+  wireOffers(r, isExample);
+
   const tabsEl = document.getElementById('tabs');
   if (tabsEl) tabsEl.onclick = (e) => {
     const t = e.target.dataset.tab;
@@ -636,6 +755,67 @@ function render(r, { isExample }) {
     PREFS.tab = t; savePrefs(); render(r, { isExample });
     window.scrollTo(0, 0);
   };
+}
+
+/* ================= offer analyser ================= */
+
+function wireOffers(r, isExample) {
+  const keepScroll = () => { const y = window.scrollY; render(r, { isExample }); window.scrollTo(0, y); };
+  const seg = document.getElementById('tradeseg');
+  if (seg) seg.onclick = (e) => {
+    const v = e.target.dataset.tv;
+    if (!v || v === PREFS.tradeView) return;
+    PREFS.tradeView = v; savePrefs(); keepScroll();
+  };
+  const team = document.getElementById('offer-team');
+  if (!team) return;
+  team.onchange = () => {
+    OFFER = { partner: Number(team.value), give: OFFER.give, get: [], result: null };
+    keepScroll();
+  };
+  document.querySelectorAll('input[data-side]').forEach(box => {
+    box.onchange = () => {
+      const side = box.dataset.side;
+      OFFER[side] = box.checked ? [...OFFER[side], box.value]
+                                : OFFER[side].filter(x => x !== box.value);
+      OFFER.result = null;
+      box.closest('.pick')?.classList.toggle('on', box.checked);
+      const go = document.getElementById('offer-go');
+      if (go) go.disabled = !(OFFER.give.length || OFFER.get.length);
+      const out = document.getElementById('offer-out');
+      if (out) out.innerHTML = '';
+    };
+  });
+  const clear = document.getElementById('offer-clear');
+  if (clear) clear.onclick = () => { OFFER = { partner: OFFER.partner, give: [], get: [], result: null }; keepScroll(); };
+  const go = document.getElementById('offer-go');
+  if (go) go.onclick = () => {
+    const st = r._state;
+    const partner = OFFER.partner ?? Number(team.value);
+    OFFER.partner = partner;
+    const res = analyzeOffer(st, r._ros, r._weekPts, r._levels, {
+      partner, give: OFFER.give, get: OFFER.get,
+      minGain: r.thresholds?.tradeGain ?? 8, isLocked: r._isLocked,
+    });
+    if (res) {
+      try {
+        const c = buildCase(st, { partner_roster_id: partner, send: OFFER.give,
+          receive: OFFER.get, value_ratio: res.value_ratio, acceptance: null }, r._ros);
+        if (c) res.proposal = { ...c, points: buildKeyPoints(c) };
+      } catch { /* the card is extra; the verdict stands without it */ }
+    }
+    OFFER.result = res;
+    keepScroll();
+    document.getElementById('offer-out')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const card = document.querySelector('details[data-offercard]');
+  if (card) card.addEventListener('toggle', () => {
+    const host = document.getElementById('pkgcard-offer');
+    if (card.open && host && !host.dataset.done && OFFER.result?.proposal) {
+      host.innerHTML = buildSVG(OFFER.result.proposal);
+      host.dataset.done = '1';
+    }
+  });
 }
 
 /* ================= boot ================= */

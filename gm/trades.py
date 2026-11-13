@@ -120,7 +120,8 @@ def find_trades(state: LeagueState, ros: dict[str, float],
                 levels: ReplacementLevels, *,
                 limit: int = 8, max_send: int = 2,
                 min_my_gain: float = 3.0,
-                min_their_gain: float = 1.0) -> list[TradeIdea]:
+                min_their_gain: float = 1.0,
+                keep: set[str] | None = None) -> list[TradeIdea]:
     me = state.me
     if not me:
         return []
@@ -131,8 +132,10 @@ def find_trades(state: LeagueState, ros: dict[str, float],
 
     # My tradeable pieces: surplus depth, not my irreplaceable starters.
     my_ranked = sorted(my_pts.items(), key=lambda kv: -kv[1])
-    my_candidates = [pid for pid, _ in my_ranked[1:]]  # keep the single best player
-    my_candidates = my_candidates[:12]
+    # Keep your best, and anyone the plan has only just picked up: adding a
+    # player in one step and shipping him out in the next is not a plan.
+    keep = keep or set()
+    my_candidates = [pid for pid, _ in my_ranked[1:] if pid not in keep][:12]
 
     ideas: list[TradeIdea] = []
 

@@ -10,14 +10,16 @@ from .lineup import Lineup, LineupSlot, optimize
 from .players import pronouns
 from .scoring import SLOT_ELIGIBILITY
 from .monitor import Change, detect
+from .roster import RosterFix, apply_moves, clone_team, plan_roster_fix
 from .sleeper import Sleeper
 from .trades import TradeIdea, find_trades, trade_chips
 from .value import ReplacementLevels, replacement_levels, vor
 from .waivers import DropCandidate, WaiverTarget, drop_candidates, recommend_waivers
 
-# Sleeper stores waiver day as 0=Tuesday ... 6=Monday.
-WAIVER_DAYS = ["Tuesday", "Wednesday", "Thursday", "Friday",
-               "Saturday", "Sunday", "Monday"]
+# Sleeper counts the waiver day from Monday: 2 processes early Wednesday,
+# which is what a league's transaction log shows.
+WAIVER_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+               "Saturday", "Sunday"]
 _WEEKDAY_INDEX = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
                   "Friday": 4, "Saturday": 5, "Sunday": 6}
 
@@ -96,6 +98,7 @@ class Report:
     deadlines: list[str]
     trade_note: str = ""
     held_back: int = 0
+    roster_fix: RosterFix | None = None
     waiver_type: str = "none"      # faab | rolling | reverse | none
     uses_faab: bool = False
     waiver_position: int = 0
@@ -163,171 +166,208 @@ def build_report(league_id: str, user_id: str | None = None, *,
     trades: list[TradeIdea] = []
     faab_left = 0
 
+    weeks_left = max(1, state.weeks_remaining)
+
+    # The report is a plan, not a menu. Each stage is worked out against the
+    # roster the earlier stages leave behind, so no step can contradict,
+    # repeat or offer an alternative to another one. Mirrors docs/report.js.
+    def _below_floor(a: Action) -> bool:
+        if a.kind == "start_sit":
+            return not a.payload.get("forced") and a.impact < floor["start_sit"]
+        if a.kind == "waiver":
+            return a.per_week < floor["waiver_per_week"]
+        if a.kind == "trade":
+            return a.impact < floor["trade_gain"]
+        return False
+
+    roster_fix = None
+    added: set[str] = set()
+    original = me
     if me:
-        current_starters = list(me.starters)
-        roster_week = {pid: week_pts.get(pid, 0.0) for pid in me.active_players()}
-        positions = state.positions_map(roster_week)
-        lineup = optimize(rules, roster_week, positions)
+        # The full ranking comes from the roster as it stands.
+        drops = drop_candidates(state, ros, limit=8, week_pts=week_pts)
 
-        current_total = round(sum(week_pts.get(p, 0.0) for p in current_starters), 2)
-        lineup_gain = round(lineup.total - current_total, 2)
-        _current_total = current_total
+        starters_before = list(me.starters)
+        # ---- step 1: make the roster legal ----
+        roster_fix = plan_roster_fix(state, me, ros, week_pts)
+        vacated_by = {p: "moved to IR" for p in roster_fix.to_ir}
+        vacated_by.update({d.player_id: "dropped" for d in roster_fix.drops})
+        me = apply_moves(clone_team(me), to_ir=roster_fix.to_ir,
+                         activate=roster_fix.activate,
+                         drop=[d.player_id for d in roster_fix.drops])
+        state.teams[state.my_roster_id] = me
+        actions.extend(_roster_actions(state, roster_fix, week_pts))
 
-        # ---- start/sit ----
-        # Report who actually enters and leaves the lineup. A player moving
-        # between slots is not a benching, and reporting it as one is wrong.
-        optimal_ids = set(lineup.starter_ids())
-        current_ids = {p for p in current_starters if p and p != "0"}
-        slot_of = {s.player_id: s.slot for s in lineup.slots if s.player_id}
-        weeks_left = max(1, state.weeks_remaining)
-
-        entering = optimal_ids - current_ids
-        leaving = sorted(current_ids - optimal_ids,
-                         key=lambda p: week_pts.get(p, 0.0))
-        handled: set[str] = set()
-
-        # Pair each incoming player with the player he actually displaces, by
-        # slot. Zipping the two lists by index pairs unrelated players -- it
-        # will cheerfully tell you to start a QB "over" a tight end.
-        pairs: list[tuple[str, str | None, str]] = []
-        for i, slot in enumerate(lineup.slots):
-            new_pid = slot.player_id
-            if not new_pid or new_pid not in entering:
-                continue
-            here = current_starters[i] if i < len(current_starters) else None
-            if here in ("0", ""):
-                here = None
-            out_pid = None
-            if here and here in set(leaving) and here not in handled:
-                out_pid = here            # he literally held this slot
-            else:
-                elig = SLOT_ELIGIBILITY.get(slot.slot, {slot.slot})
-                options = [x for x in leaving if x not in handled
-                           and (state.players.get(x).position
-                                if state.players.get(x) else None) in elig]
-                if options:
-                    out_pid = min(options, key=lambda x: week_pts.get(x, 0.0))
-            if out_pid:
-                handled.add(out_pid)
-            pairs.append((new_pid, out_pid, slot.slot))
-
-        for new_pid, out_pid, slot_name in pairs:
-            np_ = state.players.get(new_pid)
-            op = state.players.get(out_pid) if out_pid else None
-            in_pts = week_pts.get(new_pid, 0.0)
-            out_pts = week_pts.get(out_pid, 0.0) if out_pid else 0.0
-            gain = round(in_pts - out_pts, 2)
-            over = f" over {op.name}" if op else " (empty slot)"
-
-            driver = ""
-            if op and not state.projections.has_game(out_pid, week):
-                driver = f"{op.name} is on a bye this week and will score zero"
-                tail = f" — {op.name} is on BYE"
-            elif op and op.injury_status in {"Out", "IR", "Doubtful"}:
-                driver = f"{op.name} is listed {op.injury_status}"
-                tail = f" — {op.name} is {op.injury_status}"
-            else:
-                tail = ""
-
-            why = [{"h": "The swap", "t":
-                    f"{np_.name if np_ else new_pid} projects {in_pts:.1f} points "
-                    f"in week {week}"
-                    + (f" against {out_pts:.1f} for {op.name}" if op
-                       else " and the slot is currently empty")
-                    + f" — a swing of {gain:.1f} points, scored under your "
-                      f"league's settings rather than generic rankings."}]
-            if driver:
-                why.append({"h": "Why now", "t": driver[0].upper() + driver[1:] + "."})
-            why.append({"h": "Why this player and not another", "t":
-                f"Your whole roster is assigned to slots at once rather than "
-                f"picked one at a time, so flex spots get filled optimally. "
-                f"This is the best legal arrangement of the players you have, "
-                f"totalling {lineup.total:.1f} projected points."})
-
-            actions.append(Action(
-                kind="start_sit", priority=1,
-                headline=f"START {np_.name if np_ else new_pid} at "
-                         f"{slot_name}{over}{tail}",
-                detail=f"{in_pts:.1f} proj vs {out_pts:.1f} — "
-                       f"+{gain:.1f} pts in week {week}",
-                payload={"player_id": new_pid, "slot": slot_name,
-                         "bench": out_pid, "gain": gain},
-                impact=gain, per_week=gain,
-                weight=gain * URGENCY["lineup"],
-                horizon=f"Before week {week} kickoff",
-                reasoning=why,
-            ))
-
-        # Starters with no viable replacement -- a warning, not a swap.
-        for pid in optimal_ids | current_ids:
-            if pid in handled:
-                continue
-            p = state.players.get(pid)
-            if not p:
-                continue
-            on_bye = not state.projections.has_game(pid, week)
-            hurt = p.injury_status in {"Out", "IR", "Doubtful"}
-            if not (on_bye or hurt) or pid not in current_ids:
-                continue
-            label = f"on BYE in week {week}" if on_bye else f"{p.injury_status}"
-            actions.append(Action(
-                kind="alert", priority=1,
-                headline=f"{p.name} is {label} and is in your lineup",
-                detail="They will score zero. Nothing on your bench beats them "
-                       "outright, so look at the waiver wire.",
-                payload={"player_id": pid},
-                impact=0.0, per_week=0.0, weight=7.0,
-                horizon=f"Before week {week} kickoff",
-                reasoning=[
-                    {"h": "What happens if you do nothing", "t":
-                     f"{p.name} takes a zero in a starting slot. In a "
-                     f"{rules.num_teams}-team league that is usually the "
-                     f"difference in a weekly matchup."},
-                    {"h": "Why no swap is offered", "t":
-                     "No player on your bench projects higher in a slot they "
-                     "are eligible for, so there is no free fix — the answer "
-                     "is on the waiver wire, not your roster."},
-                ],
-            ))
-
-        # ---- waivers & drops ----
+        # ---- step 2: waivers, against the legal roster ----
+        # No kickoff schedule on this side, so a claim is never assumed to
+        # make this week's lineup. It changes the roster trades are planned on.
         faab_left = max(0, rules.waiver_budget - me.waiver_budget_used)
         waivers = recommend_waivers(state, ros, week_pts, levels, limit=10)
-        drops = drop_candidates(state, ros, limit=8, week_pts=week_pts)
-        for i, w in enumerate(waivers[:5]):
+        planned: list[WaiverTarget] = []
+        for w in waivers[:5]:
             if rules.uses_faab and w.faab_bid:
                 bid = f" — bid ${w.faab_bid} ({w.faab_pct:.0f}% of your ${faab_left})"
             elif not rules.uses_faab:
-                # Rolling/reverse waivers: the cost is spending your priority.
                 bid = (f" — uses your #{me.waiver_position} waiver priority"
                        if me.waiver_position else "")
             else:
                 bid = ""
             drop_txt = f", drop {w.drop_name}" if w.drop_id else ""
             per_week = w.net_gain / weeks_left
-            actions.append(Action(
-                kind="waiver",
-                priority=2,
-                headline=f"CLAIM {w.name} ({w.position}-{w.team}){bid}{drop_txt}",
+            a = Action(
+                kind="waiver", priority=2,
+                headline=f"CLAIM {w.name} ({w.position}-{w.team}){drop_txt}{bid}",
                 detail=w.rationale,
                 payload={"player_id": w.player_id, "bid": w.faab_bid,
                          "drop_id": w.drop_id, "net_gain": w.net_gain,
                          "alternatives": [
-                             {"label": f"{a.name} ({a.position}-{a.team})",
-                              "bid": a.faab_bid, "net_gain": a.net_gain,
-                              "drop_name": a.drop_name, "detail": a.rationale}
-                             for a in w.alternatives
+                             {"label": f"{x.name} ({x.position}-{x.team})",
+                              "bid": x.faab_bid, "net_gain": x.net_gain,
+                              "drop_name": x.drop_name, "detail": x.rationale}
+                             for x in w.alternatives
                          ]},
                 impact=w.net_gain, per_week=round(per_week, 2),
                 weight=per_week * URGENCY["waiver"],
                 horizon=f"Waivers run {next_waiver_txt}",
                 reasoning=w.reasoning,
+            )
+            actions.append(a)
+            if not _below_floor(a):
+                planned.append(w)
+                added.add(w.player_id)
+
+        # ---- step 3: the lineup, one swap at a time ----
+        current_starters = list(me.starters)
+        on_roster = set(me.active_players())
+        slots = rules.starting_slots
+        positions = state.positions_map(list(on_roster))
+
+        def arrange(chosen: set[str]):
+            pts = {p: week_pts.get(p, 0.0) + 1e-3 for p in chosen}
+            lu = optimize(rules, pts, positions)
+            if len(lu.starter_ids()) != len(pts):
+                return None
+            return [s_.player_id for s_ in lu.slots]
+
+        def value_of(filled):
+            return sum(week_pts.get(p, 0.0) for p in filled if p)
+
+        def is_dead(pid):
+            p = state.players.get(pid)
+            return (not state.projections.has_game(pid, week)) or bool(
+                p and p.injury_status in {"Out", "IR", "Doubtful"})
+
+        prev = [(current_starters[i] if i < len(current_starters)
+                 and current_starters[i] in on_roster else None)
+                for i in range(len(slots))]
+        start_total = value_of(prev)
+        accepted = []
+        for _ in range(len(slots) + 1):
+            chosen = {p for p in prev if p}
+            base = value_of(prev)
+            bench = [p for p in on_roster if p not in chosen]
+            empty_at = next((i for i, p in enumerate(prev) if not p), -1)
+            best = None
+            for e in bench:
+                e_pos = positions.get(e)
+                for l in ([None] if empty_at >= 0 else []) + sorted(chosen):
+                    idx = prev.index(l) if l else empty_at
+                    if e_pos in SLOT_ELIGIBILITY.get(slots[idx], {slots[idx]}):
+                        filled = list(prev); filled[idx] = e
+                    else:
+                        nxt = set(chosen); nxt.discard(l); nxt.add(e)
+                        filled = arrange(nxt)
+                    if not filled:
+                        continue
+                    g = round(value_of(filled) - base, 2)
+                    forced = l is None or is_dead(l)
+                    if g >= floor["start_sit"] or (forced and g > 0.05):
+                        if not best or g > best[2]:
+                            best = (e, l, g, forced, filled, idx)
+            if not best:
+                break
+            e, l, g, forced, filled, idx = best
+            held_by = None if l else (starters_before[idx] if idx < len(starters_before) else None)
+            shifts = [(p, slots[prev.index(p)], slots[i]) for i, p in enumerate(filled)
+                      if p and p != e and p in prev and slots[prev.index(p)] != slots[i]]
+            accepted.append((e, l, g, forced, filled, shifts, held_by))
+            prev = filled
+
+        lineup = Lineup(
+            slots=[LineupSlot(slot=slots[i], player_id=prev[i],
+                              points=round(week_pts.get(prev[i], 0.0), 2) if prev[i] else 0.0)
+                   for i in range(len(slots))],
+            bench=sorted(((p, round(week_pts.get(p, 0.0), 2))
+                          for p in on_roster if p not in set(prev)),
+                         key=lambda kv: -kv[1]),
+            total=round(value_of(prev), 2),
+        )
+        lineup_gain = round(lineup.total - start_total, 2)
+
+        for e, l, g, forced, filled, shifts, held_by in accepted:
+            np_ = state.players.get(e)
+            op = state.players.get(l) if l else None
+            in_pts = week_pts.get(e, 0.0)
+            out_pts = week_pts.get(l, 0.0) if l else 0.0
+            slot_name = slots[filled.index(e)]
+            if op:
+                over = f" over {op.name}"
+            elif held_by in vacated_by:
+                hb = state.players.get(held_by)
+                over = (f" in place of {hb.name if hb else held_by} "
+                        f"({vacated_by[held_by]} above)")
+            else:
+                over = " (empty slot)"
+            tail = ""
+            if op and not state.projections.has_game(l, week):
+                tail = f" — {op.name} is on BYE"
+            elif op and op.injury_status in {"Out", "IR", "Doubtful"}:
+                tail = f" — {op.name} is {op.injury_status}"
+            shift_txt = ", ".join(f"{(state.players.get(p).name if state.players.get(p) else p)} moves from {a_} to {b_}"
+                                  for p, a_, b_ in shifts)
+            actions.append(Action(
+                kind="start_sit", priority=1,
+                headline=f"START {np_.name if np_ else e} at {slot_name}{over}{tail}",
+                detail=f"{in_pts:.1f} proj vs {out_pts:.1f} — +{g:.1f} pts in week {week}"
+                       + (f". To make room, {shift_txt}." if shift_txt else ""),
+                payload={"player_id": e, "slot": slot_name, "bench": l,
+                         "gain": g, "forced": forced},
+                impact=g, per_week=g, weight=g * URGENCY["lineup"],
+                horizon=f"Before week {week} kickoff",
+                reasoning=[{"h": "The swap", "t":
+                    f"{np_.name if np_ else e} projects {in_pts:.1f} points in week {week}"
+                    + (f" against {out_pts:.1f} for {op.name}" if op else
+                       " and the slot is currently empty")
+                    + f", a swing of {g:.1f}. Each swap is made against the lineup "
+                      f"the previous one left, so they can be done in order."}],
             ))
+
+        # Starters with no viable replacement -- a warning, not a swap.
+        for pid in [p for p in prev if p]:
+            if not is_dead(pid):
+                continue
+            p = state.players.get(pid)
+            if not p:
+                continue
+            label = (f"on BYE in week {week}" if not state.projections.has_game(pid, week)
+                     else f"{p.injury_status}")
+            actions.append(Action(
+                kind="alert", priority=1,
+                headline=f"{p.name} is {label} and is in your lineup",
+                detail="They will score zero. Nothing on your bench can fill the "
+                       "slot, and no free agent cleared the bar.",
+                payload={"player_id": pid}, impact=0.0, per_week=0.0, weight=7.0,
+                horizon=f"Before week {week} kickoff",
+            ))
+
+        # Claims change the roster that trades are planned against.
+        for w in planned:
+            apply_moves(me, add=[w.player_id], drop=[w.drop_id] if w.drop_id else [])
 
         # ---- trades ----
         if do_trades:
             trades = find_trades(state, ros, levels, limit=6,
-                                 min_my_gain=floor["trade_gain"])
+                                 min_my_gain=floor["trade_gain"], keep=added)
             if not trades:
                 # Say why rather than showing an empty panel. Naming the
                 # chip is the actionable part: it's who to shop.
@@ -389,77 +429,16 @@ def build_report(league_id: str, user_id: str | None = None, *,
                     reasoning=why,
                 ))
 
-    # ---- alerts from change detection ----
-    INFO_WEIGHT = {("critical", True): 5.0, ("critical", False): 2.2,
-                   ("high", True): 1.9, ("high", False): 0.9}
-    for c in changes:
-        if c.severity in {"critical", "high"}:
-            actions.append(Action(
-                kind="alert", priority=2,
-                headline=c.headline, detail=c.detail,
-                payload={"category": c.category, "affects_me": c.affects_me},
-                impact=0.0, per_week=0.0,
-                weight=INFO_WEIGHT.get((c.severity, bool(c.affects_me)), 0.8),
-                horizon="Reacting early is the edge",
-                reasoning=[{"h": "Why you are seeing this", "t":
-                    (f"This touches your own roster. " if c.affects_me else
-                     "This is league news that may open an opportunity. ")
-                    + (c.detail or c.headline)
-                    + " Detected by comparing the league against the last check."}],
-            ))
-
-    # Drop moves whose edge is too small to be worth acting on. Warnings stay:
-    # a bye week is a certainty, not a projected edge.
-    def _below_floor(a: Action) -> bool:
-        if a.kind == "start_sit":
-            return a.impact < floor["start_sit"]
-        if a.kind == "waiver":
-            return a.per_week < floor["waiver_per_week"]
-        if a.kind == "trade":
-            return a.impact < floor["trade_gain"]
-        return False
-
+    # League news stays in `changes`. It is context, not a step.
     held_back = sum(1 for a in actions if _below_floor(a))
     actions = [a for a in actions if not _below_floor(a)]
+    if original is not None:
+        state.teams[state.my_roster_id] = original
 
-    # The lineup has to match what is actually recommended. Reporting the
-    # theoretical optimum while filtering the actions produced a digest which
-    # said "2.5 points available" and "nothing needs doing" in the same breath.
-    if me and lineup is not None:
-        slots = rules.starting_slots
-        filled: list[str | None] = [
-            (current_starters[i] if i < len(current_starters)
-             and current_starters[i] not in ("0", "") else None)
-            for i in range(len(slots))
-        ]
-        for a in actions:
-            if a.kind != "start_sit":
-                continue
-            out_pid = a.payload.get("bench")
-            if out_pid and out_pid in filled:
-                filled[filled.index(out_pid)] = a.payload.get("player_id")
-        # A slot the current lineup left empty still takes the best legal option.
-        for i, s in enumerate(lineup.slots):
-            if filled[i] is None and s.player_id:
-                filled[i] = s.player_id
-
-        started = {p for p in filled if p}
-        roster_week = {pid: week_pts.get(pid, 0.0) for pid in me.active_players()}
-        lineup = Lineup(
-            slots=[LineupSlot(slot=slots[i], player_id=filled[i],
-                              points=round(week_pts.get(filled[i], 0.0), 2)
-                              if filled[i] else 0.0)
-                   for i in range(len(slots))],
-            bench=sorted(((pid, round(pts, 2))
-                          for pid, pts in roster_week.items() if pid not in started),
-                         key=lambda kv: -kv[1]),
-            total=round(sum(week_pts.get(p, 0.0) for p in filled if p), 2),
-        )
-        lineup_gain = round(lineup.total - _current_total, 2)
-
-    # Rank everything on one scale: points at stake, weighted by how soon the
-    # chance to act disappears. This is what orders the list.
-    actions.sort(key=lambda a: -a.weight)
+    # Numbered in the order you do them: roster fixes, lineup, pickups,
+    # warnings, then offers. Bigger move first within a stage.
+    stage = {"roster": 0, "start_sit": 1, "waiver": 2, "alert": 3, "trade": 4}
+    actions.sort(key=lambda a: (stage.get(a.kind, 5), -a.weight))
     for i, a in enumerate(actions, 1):
         a.rank = i
         a.priority, a.tier_label = _tier(a.weight)
@@ -487,7 +466,7 @@ def build_report(league_id: str, user_id: str | None = None, *,
         lineup=lineup, current_starters=current_starters,
         lineup_gain=lineup_gain, actions=actions, waivers=waivers,
         drops=drops, trades=trades, changes=changes, trade_note=trade_note,
-        held_back=held_back,
+        held_back=held_back, roster_fix=roster_fix,
         faab_left=faab_left, next_waiver=next_waiver_txt,
         deadlines=deadlines,
         waiver_type=rules.waiver_type, uses_faab=rules.uses_faab,
@@ -496,3 +475,42 @@ def build_report(league_id: str, user_id: str | None = None, *,
     if owned_con:
         con.close()
     return report
+
+
+def _roster_actions(state, fix: RosterFix, week_pts: dict[str, float]) -> list[Action]:
+    """The steps that make the roster legal, written as actions."""
+    out: list[Action] = []
+    def name(pid):
+        p = state.players.get(pid)
+        return p.name if p else pid
+    over_txt = (f"You have {fix.active_count} players on a {fix.limit}-man roster, "
+                f"{fix.over_by} over the limit. Sleeper will not process an add, "
+                f"claim or trade until that is fixed." if fix.over_by > 0 else "")
+    for pid in fix.activate:
+        out.append(Action(
+            kind="roster", priority=1, headline=f"ACTIVATE {name(pid)} from IR",
+            detail="No longer listed as injured, so can't stay on IR. Sleeper "
+                   "freezes the roster until this is done.",
+            payload={"player_id": pid, "move": "activate"}, weight=9.0,
+            horizon="Now, before anything else"))
+    for pid in fix.to_ir:
+        p = state.players.get(pid)
+        needed = fix.over_by > 0 or bool(fix.activate)
+        out.append(Action(
+            kind="roster", priority=1 if needed else 3,
+            headline=f"MOVE {name(pid)} to IR",
+            detail=f"Listed {(p.injury_status if p else '') or 'injured'} and you have "
+                   f"an open IR slot. Frees a bench spot for nothing.",
+            payload={"player_id": pid, "move": "ir"},
+            weight=8.0 if needed else 1.2,
+            horizon="Now, before anything else",
+            reasoning=[{"h": "Why", "t": over_txt or "A free bench spot costs nothing."}]))
+    for d in fix.drops:
+        out.append(Action(
+            kind="roster", priority=1, headline=f"DROP {d.name}",
+            detail=f"Costs {d.cost:.1f} pts rest of season, the cheapest cut on your roster."
+                   + (f" {d.next_name} is next at {d.next_cost:.1f}." if d.next_name else ""),
+            payload={"player_id": d.player_id, "move": "drop", "cost": d.cost},
+            weight=7.5, horizon="Now, before anything else",  # after IR moves
+            reasoning=[{"h": "Why", "t": over_txt}]))
+    return out

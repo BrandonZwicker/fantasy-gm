@@ -181,21 +181,31 @@ def cmd_digest(args) -> int:
         return 3
 
     r = build_report(league_id, user_id, force=True)
-    urgent = [a for a in r.actions if a.priority <= args.max_priority]
+    # The actions are a plan, numbered in the order to do them. Cutting it by
+    # priority would drop steps that later ones depend on, so it is all or
+    # nothing: the whole plan when there is one.
+    steps = r.actions
+    urgent = [a for a in steps if a.priority <= args.max_priority]
 
     lines = [f"## {r.league_name.strip()} — week {r.week}", ""]
+    fix = r.roster_fix
+    if fix and fix.over_by > 0:
+        lines.append(f"**{fix.active_count} players on a {fix.limit}-man roster.** "
+                     "Step 1 fixes it.")
+        lines.append("")
     if r.lineup_gain > 0.1:
-        lines.append(f"**{r.lineup_gain:.1f} projected points** available from lineup changes.")
+        lines.append(f"**{r.lineup_gain:.1f} projected points** from the lineup steps below.")
         lines.append("")
     if not urgent:
         lines.append("Nothing needs doing right now.")
-    for a in urgent:
-        unit = "this week" if a.kind == "start_sit" else "rest of season"
-        conf = ""
-        lines.append(f"- **{a.tier_label}** — {a.headline}")
-        lines.append(f"  - +{a.impact:.1f} pts {unit}{conf} · {a.horizon}")
-        if a.detail:
-            lines.append(f"  - {a.detail}")
+    else:
+        for a in steps:
+            unit = "this week" if a.kind == "start_sit" else "rest of season"
+            lines.append(f"{a.rank}. **{a.headline}**")
+            meta = (f"+{a.impact:.1f} pts {unit} · " if a.impact > 0.05 else "") + a.horizon
+            lines.append(f"   - {meta}")
+            if a.detail:
+                lines.append(f"   - {a.detail}")
     if r.held_back:
         lines.append("")
         lines.append(f"_{r.held_back} move(s) too small to be worth making._")

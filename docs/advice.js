@@ -32,7 +32,7 @@ function rankDrops(rules, rosterPts, positions, players, startingNow,
     const without = lineupValue(rules, rosterPts, positions, new Set([pid]));
     const p = players.get(pid);
     out.push({
-      player_id: pid, name: p ? players.label(pid) : pid,
+      player_id: pid, name: p ? players.name(pid) : pid,
       position: p?.position || '?', cost: r2(base - without),
       projection_ros: r2(rosterPts[pid] || 0),
       starts_now: startingNow.has(pid),
@@ -61,6 +61,217 @@ export function dropCandidates(state, ros, limit = 8, weekPts = null) {
   }
   return rankDrops(state.rules, rosterPts, positions, state.players,
                    startingNow, limit, false);
+}
+
+/* ---------------- roster limit ----------------
+ * Sleeper blocks adds while a roster is over its limit, and an IR slot holding
+ * a player who no longer qualifies freezes the roster entirely. So before any
+ * other advice can be acted on, the roster has to be legal. Parking a player
+ * on IR costs nothing, so that always comes before cutting anyone.
+ */
+
+// Designations that keep a player out for weeks. Worth parking on IR
+// whenever a slot is free, since the bench spot is pure gain.
+const LONG_TERM = new Set(['IR', 'PUP', 'Sus', 'NA', 'DNR']);
+
+/** A detached copy of a team that moves can be applied to. */
+export function cloneTeam(t) {
+  return { ...t, players: [...t.players], starters: [...t.starters],
+           reserve: [...t.reserve], taxi: [...(t.taxi || [])] };
+}
+
+/** Apply moves to a cloned team in place. Removed starters leave an empty slot. */
+export function applyMoves(team, { toIR = [], activate = [], drop = [], add = [] } = {}) {
+  const vacate = (pid) => {
+    const i = team.starters.indexOf(pid);
+    if (i >= 0) team.starters[i] = '0';
+  };
+  for (const pid of activate) team.reserve = team.reserve.filter(p => p !== pid);
+  for (const pid of toIR) {
+    if (!team.reserve.includes(pid)) team.reserve.push(pid);
+    vacate(pid);
+  }
+  for (const pid of drop) {
+    team.players = team.players.filter(p => p !== pid);
+    team.reserve = team.reserve.filter(p => p !== pid);
+    vacate(pid);
+  }
+  for (const pid of add) if (!team.players.includes(pid)) team.players.push(pid);
+  return team;
+}
+
+/**
+ * What it takes to make `team` legal: who comes off IR, who goes on, and who
+ * gets cut. Cuts are chosen one at a time against the roster that is left,
+ * so the second cut accounts for the first.
+ */
+export function planRosterFix(state, team, ros, weekPts, { isLocked = () => false } = {}) {
+  const rules = state.rules;
+  const players = state.players;
+  const eligibleIR = rules.irEligible;
+  const statusOf = (pid) => players.get(pid)?.injury_status || '';
+
+  // A player parked on IR who has been cleared has to come off first.
+  const activate = team.reserve.filter(pid => players.get(pid)
+                                             && !eligibleIR.has(statusOf(pid)));
+  const parked = team.reserve.filter(p => !activate.includes(p));
+  const active = [...team.activePlayers(), ...activate];
+  const openIR = Math.max(0, rules.reserveSlots - parked.length);
+  const limit = rules.rosterSize;
+  let over = active.length - limit;
+
+  // Who can go on IR: the ones out longest first, then whoever is least use
+  // this week. A player who is merely Out this week is only parked when a
+  // spot is genuinely needed, since he will need activating again in days.
+  const irCands = active
+    .filter(pid => eligibleIR.has(statusOf(pid)) && !isLocked(pid))
+    .sort((a, b) => (LONG_TERM.has(statusOf(b)) - LONG_TERM.has(statusOf(a)))
+                    || ((weekPts[a] || 0) - (weekPts[b] || 0)));
+  const toIR = [];
+  for (const pid of irCands) {
+    if (toIR.length >= openIR) break;
+    if (LONG_TERM.has(statusOf(pid)) || over - toIR.length > 0) toIR.push(pid);
+  }
+  over -= toIR.length;
+
+  const drops = [];
+  if (over > 0) {
+    const ids = active.filter(p => !toIR.includes(p));
+    const pts = {}, wk = {};
+    for (const pid of ids) { pts[pid] = ros[pid] || 0; wk[pid] = weekPts[pid] || 0; }
+    const positions = state.positionsMap(ids);
+    for (let n = 0; n < over; n++) {
+      const baseRos = lineupValue(rules, pts, positions);
+      const baseWk = lineupValue(rules, wk, positions);
+      const starting = new Set(optimize(rules, wk, positions).starterIds());
+      const ranked = Object.keys(pts)
+        .filter(pid => !isLocked(pid))
+        .map(pid => {
+          const without = new Set([pid]);
+          return {
+            player_id: pid, name: players.name(pid),
+            position: players.get(pid)?.position || '?',
+            cost: r2(baseRos - lineupValue(rules, pts, positions, without)),
+            cost_week: r2(baseWk - lineupValue(rules, wk, positions, without)),
+            projection_ros: r2(pts[pid]),
+            starts_now: starting.has(pid),
+          };
+        })
+        .sort((a, b) => (a.starts_now - b.starts_now) || (a.cost - b.cost)
+                        || (a.cost_week - b.cost_week)
+                        || (a.projection_ros - b.projection_ros));
+      if (!ranked.length) break;
+      const pick = ranked[0];
+      pick.next = ranked[1] || null;
+      // Who takes over his minutes in your lineup, if anyone.
+      const lineupBefore = optimize(rules, pts, positions);
+      const lineupAfter = optimize(rules, pts, positions, new Set([pick.player_id]));
+      const inNow = new Set(lineupBefore.starterIds());
+      pick.replaced_by = lineupAfter.starterIds().filter(p => !inNow.has(p))
+                                   .map(p => players.name(p));
+      drops.push(pick);
+      delete pts[pick.player_id]; delete wk[pick.player_id];
+    }
+  }
+
+  return {
+    limit, active_count: active.length - activate.length,
+    over_by: Math.max(0, active.length - activate.length - limit),
+    open_ir: openIR, activate, toIR, drops,
+    needed: activate.length > 0 || over + toIR.length > 0 || drops.length > 0,
+    legal_after: over <= 0 || drops.length === over,
+  };
+}
+
+/* ---------------- offer analysis ----------------
+ * Score any proposed deal, whichever side wrote it: what it does to both
+ * lineups now and rest-of-season, whether either roster ends up illegal, and
+ * if it falls short, the smallest change that would make it worth taking.
+ */
+
+export function analyzeOffer(state, ros, weekPts, levels, {
+  partner, give = [], get = [], minGain = 8, isLocked = () => false } = {}) {
+  const rules = state.rules;
+  const me = state.me;
+  const them = state.teams[partner];
+  if (!me || !them) return null;
+  const vors = vor(ros, state.players, levels);
+  const weeksLeft = Math.max(1, state.weeksRemaining);
+
+  const lineupOf = (team, src) => {
+    const pts = {};
+    for (const pid of team.activePlayers()) pts[pid] = src[pid] || 0;
+    return pts;
+  };
+  const value = (pts) => lineupValue(rules, pts, state.positionsMap(pts));
+
+  const side = (team, out, inn) => {
+    const after = applyMoves(cloneTeam(team), { drop: out, add: inn });
+    // Accepting can push a roster over the limit, and the cut that forces
+    // is part of the price.
+    const fix = planRosterFix(state, after, ros, weekPts, { isLocked });
+    const settled = applyMoves(cloneTeam(after),
+      { toIR: fix.toIR, activate: fix.activate, drop: fix.drops.map(d => d.player_id) });
+    const fixBefore = planRosterFix(state, team, ros, weekPts, { isLocked });
+    const settledBefore = applyMoves(cloneTeam(team),
+      { toIR: fixBefore.toIR, activate: fixBefore.activate,
+        drop: fixBefore.drops.map(d => d.player_id) });
+    return {
+      ros: r2(value(lineupOf(settled, ros)) - value(lineupOf(settledBefore, ros))),
+      week: r2(value(lineupOf(settled, weekPts)) - value(lineupOf(settledBefore, weekPts))),
+      fix, fixBefore,
+    };
+  };
+
+  const mine = side(me, give, get);
+  const theirs = side(them, get, give);
+  const vGive = give.reduce((s, p) => s + Math.max(0, vors[p] || 0), 0);
+  const vGet = get.reduce((s, p) => s + Math.max(0, vors[p] || 0), 0);
+
+  // Extra cuts beyond the ones you already owe are the deal's doing.
+  const forced = mine.fix.drops.filter(d =>
+    !mine.fixBefore.drops.some(b => b.player_id === d.player_id));
+
+  let verdict, tone;
+  if (mine.ros >= minGain) { verdict = 'Accept'; tone = 'good'; }
+  else if (mine.ros >= 0) { verdict = 'Too close to call'; tone = 'even'; }
+  else { verdict = 'Decline'; tone = 'bad'; }
+
+  // If it falls short, the one tweak that gets it over the line: ask for one
+  // more of their players, or keep one of yours. Tested in full, both sides.
+  let counter = null;
+  if (verdict !== 'Accept') {
+    const options = [];
+    const theirTop = Object.entries(lineupOf(them, ros))
+      .filter(([p]) => !get.includes(p)).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    for (const [p] of theirTop) options.push({ give, get: [...get, p], note: `ask for ${state.players.name(p)} as well` });
+    if (give.length > 1) for (const p of give)
+      options.push({ give: give.filter(x => x !== p), get, note: `keep ${state.players.name(p)}` });
+    for (const o of options) {
+      const m = side(me, o.give, o.get);
+      if (m.ros < minGain) continue;
+      const t = side(them, o.get, o.give);
+      if (t.ros < 0) continue;     // they would never take it
+      // The counter they are most likely to accept, among those that clear
+      // your bar. Squeezing them harder only lowers the odds of a yes.
+      const score = t.ros + 0.1 * m.ros;
+      if (!counter || score > counter.score)
+        counter = { ...o, my_gain: m.ros, their_gain: t.ros, score };
+    }
+  }
+
+  return {
+    partner, partner_name: them.label, give, get,
+    give_names: give.map(p => state.players.name(p)),
+    get_names: get.map(p => state.players.name(p)),
+    my_gain: mine.ros, my_week: mine.week, my_per_week: r2(mine.ros / weeksLeft),
+    their_gain: theirs.ros, their_week: theirs.week,
+    value_ratio: vGet > 0 ? r2(vGive / vGet) : null,
+    forced_drops: forced, forced_ir: mine.fix.toIR.filter(p => !mine.fixBefore.toIR.includes(p)),
+    their_forced: theirs.fix.drops.filter(d =>
+      !theirs.fixBefore.drops.some(b => b.player_id === d.player_id)),
+    verdict, tone, counter, min_gain: minGain, weeks_left: weeksLeft,
+  };
 }
 
 /* ---------------- FAAB sizing ---------------- */
@@ -345,7 +556,7 @@ export function tradeChips(state, ros, levels, limit = 3) {
 }
 
 export function findTrades(state, ros, levels, {
-  limit = 6, maxSend = 2, minMyGain = 3, minTheirGain = 1 } = {}) {
+  limit = 6, maxSend = 2, minMyGain = 3, minTheirGain = 1, keep = new Set() } = {}) {
   const me = state.me;
   if (!me) return [];
   const rules = state.rules;
@@ -355,7 +566,10 @@ export function findTrades(state, ros, levels, {
   const myBase = teamValue(myPts);
 
   const myRanked = Object.entries(myPts).sort((a, b) => b[1] - a[1]);
-  const myCandidates = myRanked.slice(1).map(([p]) => p).slice(0, 12);  // keep your best
+  // Keep your best, and anyone the plan has only just picked up: adding a
+  // player in one step and shipping him out in the next is not a plan.
+  const myCandidates = myRanked.slice(1).map(([p]) => p)
+    .filter(p => !keep.has(p)).slice(0, 12);
   const myProf = profile(state, me, ros);
 
   const ideas = [];
